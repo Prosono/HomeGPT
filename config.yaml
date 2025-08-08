@@ -1,27 +1,27 @@
 name: HomeGPT
 slug: homegpt
 version: "0.1.0"
-description: "Streams HA events to OpenAI; summarizes (passive) or controls (active) with allow‑lists and rate limits."
-url: https://example.com/homegpt-docs
+description: "Streams HA events to OpenAI; summarizes (passive) or controls (active) with allow-lists and rate limits."
+url: https://github.com/Prosono/HomeGPT
 startup: application
 init: false
 arch:
   - amd64
   - aarch64
   - armv7
-homeassistant_api: true  # gives SUPERVISOR_TOKEN + internal API access
+homeassistant_api: true
 map:
-  - config:rw            # optional if you want to read HA config
+  - config:rw
 options:
   openai_api_key: ""
   model: "gpt-4o-mini"
-  mode: "passive"          # passive | active
-  summarize_time: "12:45"  # local HA time (HH:MM)
-  control_allowlist: []     # list of entity_ids allowed to be controlled in active mode
+  mode: "passive"
+  summarize_time: "21:30"
+  control_allowlist: []
   max_actions_per_hour: 10
-  dry_run: true             # if true, only propose actions and create notifications
+  dry_run: true
   log_level: INFO
-  language: "en"            # "en", "no", etc. Used in prompts/notifications
+  language: "en"
 schema:
   openai_api_key: str
   model: str
@@ -32,3 +32,5 @@ schema:
   dry_run: bool
   log_level: list(DEBUG|INFO|WARNING|ERROR)
   language: str
+build:
+  dockerfile: Dockerfile
