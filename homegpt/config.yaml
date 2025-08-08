@@ -1,18 +1,21 @@
 name: HomeGPT
 slug: homegpt
+version: "0.1.1"
 description: "Streams HA events to OpenAI; summarizes (passive) or controls (active) with allow-lists and rate limits."
-url: https://github.com/Prosono/HomeGPT
+url: https://github.com/prosono/homegpt
 startup: application
 init: false
 image: ghcr.io/prosono/homegpt
-version: "0.1.1"
 arch:
   - amd64
   - aarch64
   - armv7
 homeassistant_api: true
+ingress: true
+ingress_port: 8099
 map:
   - config:rw
+  - data:rw
 options:
   openai_api_key: ""
   model: "gpt-4o-mini"
