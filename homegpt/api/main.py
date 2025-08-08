@@ -1,20 +1,18 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, APIRouter, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
-import json
-import yaml
+import logging, json, yaml
 
-# ---- Models ----
+# ---- Models (fallback if models.py missing)
 try:
     from homegpt.api.models import AnalysisRequest, Settings
-except ImportError:
+except Exception:
     from pydantic import BaseModel
     class AnalysisRequest(BaseModel):
         mode: str
         focus: str | None = None
-
     class Settings(BaseModel):
         openai_api_key: str | None = None
         model: str | None = None
@@ -26,81 +24,90 @@ except ImportError:
         log_level: str | None = None
         language: str | None = None
 
-# ---- DB helpers ----
 from homegpt.api import db
 
 CONFIG_PATH = Path("/config/homegpt_config.yaml")
 
-# Path to dashboard frontend inside the container
-FRONTEND_DIR = Path(__file__).parent / "frontend"
+# Find frontend in api/frontend or ../frontend
+candidates = [Path(__file__).parent / "frontend", Path(__file__).parent.parent / "frontend"]
+for p in candidates:
+    if (p / "index.html").exists():
+        FRONTEND_DIR = p
+        break
+else:
+    FRONTEND_DIR = candidates[0]
 
 app = FastAPI(title="HomeGPT Dashboard API")
 
-# CORS (optional for ingress)
+# Simple request logging so you can see if the JS is hitting the API
+logging.basicConfig(level=logging.INFO)
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    logging.info("→ %s %s", request.method, request.url)
+    resp = await call_next(request)
+    logging.info("← %s %s", resp.status_code, request.url.path)
+    return resp
+
+# CORS not strictly needed under ingress, but harmless
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
 )
 
 # Ensure DB exists
 db.init_db()
 
-# ---------------- Ingress UI routes ----------------
-# Serve index.html for root
+# ---------- Frontend ----------
 @app.get("/")
-async def ingress_root():
+async def root():
     index_file = FRONTEND_DIR / "index.html"
     if index_file.exists():
         return FileResponse(index_file)
-    return {"error": "Dashboard frontend not found in container."}
+    return {"error": f"Dashboard not found at {index_file}"}
 
-# Serve static assets (JS, CSS, images)
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="static")
 
-# ---------------- API routes ----------------
-@app.get("/status")
+# ---------- API (under /api) ----------
+api = APIRouter()
+
+@api.get("/status")
 def get_status():
-    config = _load_config()
+    cfg = _load_config()
     last = db.get_analyses(1)
     return {
-        "mode": config.get("mode", "passive"),
-        "model": config.get("model", "gpt-4o-mini"),
-        "dry_run": config.get("dry_run", True),
+        "mode": cfg.get("mode", "passive"),
+        "model": cfg.get("model", "gpt-4o-mini"),
+        "dry_run": cfg.get("dry_run", True),
         "last_analysis": last[0] if last else None,
     }
 
-@app.post("/mode")
+@api.post("/mode")
 def set_mode(mode: str):
-    config = _load_config()
-    config["mode"] = mode
-    _save_config(config)
+    cfg = _load_config()
+    cfg["mode"] = mode
+    _save_config(cfg)
     return {"status": "ok", "mode": mode}
 
-@app.post("/run")
+@api.post("/run")
 def run_analysis(request: AnalysisRequest):
     fake_summary = f"Analysis in {request.mode} mode. Focus: {request.focus or 'General'}."
-    fake_actions = json.dumps([
-        "light.turn_off living_room",
-        "climate.set_temperature bedroom 20°C",
-    ])
+    fake_actions = json.dumps(["light.turn_off living_room", "climate.set_temperature bedroom 20°C"])
     db.add_analysis(request.mode, request.focus or "", fake_summary, fake_actions)
     return {"status": "ok", "summary": fake_summary, "actions": json.loads(fake_actions)}
 
-@app.get("/history")
+@api.get("/history")
 def history():
     return db.get_analyses(50)
 
-@app.get("/history/{analysis_id}")
+@api.get("/history/{analysis_id}")
 def get_history_item(analysis_id: int):
     return db.get_analysis(analysis_id)
 
-@app.get("/settings")
+@api.get("/settings")
 def get_settings():
     return _load_config()
 
-@app.post("/settings")
+@api.post("/settings")
 def update_settings(settings: Settings):
     cfg = _load_config()
     data = {k: v for k, v in settings.dict().items() if v is not None}
@@ -108,7 +115,9 @@ def update_settings(settings: Settings):
     _save_config(cfg)
     return {"status": "ok"}
 
-# ---------------- Helpers ----------------
+app.include_router(api, prefix="/api")
+
+# ---------- helpers ----------
 def _load_config():
     if CONFIG_PATH.exists():
         return yaml.safe_load(CONFIG_PATH.read_text()) or {}
