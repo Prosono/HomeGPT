@@ -10,26 +10,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Upgrade pip tooling
+# Newer pip grabs prebuilt wheels more often
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Copy Python dependencies
-COPY requirements.txt /app/requirements.txt
+COPY requirements.txt /app/
 RUN pip install --no-cache-dir --prefer-binary -r requirements.txt
 
-# Install FastAPI + Uvicorn for ingress dashboard
-RUN pip install --no-cache-dir fastapi uvicorn[standard]
-
-# Copy your main app files
-COPY app/ /app/app/
-
-# Copy new dashboard backend and static UI
-COPY server.py /app/server.py
-COPY static/ /app/static/
-
-# Copy run script
+COPY app/ /app/
 COPY run.sh /usr/local/bin/run.sh
 RUN chmod +x /usr/local/bin/run.sh
 
-# Default command (your existing entrypoint)
 CMD ["/usr/local/bin/run.sh"]
