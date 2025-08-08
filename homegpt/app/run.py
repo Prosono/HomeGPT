@@ -4,10 +4,10 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from homegpt.util import setup_logging, RateLimiter, next_time_of_day
-from homegpt.ha import HAClient
-from homegpt.openai_client import OpenAIClient
-from homegpt.policy import SYSTEM_PASSIVE, SYSTEM_ACTIVE, ACTIONS_JSON_SCHEMA
+from homegpt.app.util import setup_logging, RateLimiter, next_time_of_day
+from homegpt.app.ha import HAClient
+from homegpt.app.openai_client import OpenAIClient
+from homegpt.app.policy import SYSTEM_PASSIVE, SYSTEM_ACTIVE, ACTIONS_JSON_SCHEMA
 
 LANG = os.environ.get("LANGUAGE", "en")
 MODE = os.environ.get("MODE", "passive")
