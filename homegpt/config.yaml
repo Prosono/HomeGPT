@@ -5,6 +5,7 @@ description: "Streams HA events to OpenAI; summarizes (passive) or controls (act
 url: https://github.com/Prosono/HomeGPT
 startup: application
 init: false
+image: "ghcr.io/prosono/homegpt-{arch}"
 arch:
   - amd64
   - aarch64
@@ -32,5 +33,3 @@ schema:
   dry_run: bool
   log_level: list(DEBUG|INFO|WARNING|ERROR)
   language: str
-build:
-  dockerfile: Dockerfile
