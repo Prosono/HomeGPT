@@ -1,20 +1,21 @@
-from fastapi import FastAPI, Request, Query
-from fastapi import FastAPI, Depends, HTTPException, Body
-from homegpt.app.main import EVENT_BUFFER  # import the buffer
+import asyncio
+import json
+import logging
+import yaml
+from pathlib import Path
+from fastapi import FastAPI, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pathlib import Path
-import json
-import yaml
-import logging
 
-# Import real models if available
+# ---------------- Global Event Buffer ----------------
+EVENT_BUFFER: list[dict] = []
+
+# Import DB, models, analyzer
 try:
     from homegpt.api.models import AnalysisRequest, Settings
     from homegpt.api import db, analyzer
 except ImportError:
-    # Fallback for dev
     from pydantic import BaseModel
     class AnalysisRequest(BaseModel):
         mode: str
@@ -29,7 +30,6 @@ except ImportError:
         dry_run: bool | None = None
         log_level: str | None = None
         language: str | None = None
-    import sqlite3
     class db:
         @staticmethod
         def init_db(): pass
@@ -39,13 +39,9 @@ except ImportError:
         def get_analysis(aid): return {}
         @staticmethod
         def add_analysis(mode, focus, summary, actions): pass
-    analyzer = None  # placeholder
+    analyzer = None
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("HomeGPT")
-
-# at top: from homegpt.api import db
-# try to import real clients:
+# Import HA + OpenAI clients and policies
 try:
     from homegpt.app.ha import HAClient
     from homegpt.app.openai_client import OpenAIClient
@@ -54,11 +50,13 @@ try:
 except Exception:
     HAVE_REAL = False
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("HomeGPT")
+
 CONFIG_PATH = Path("/config/homegpt_config.yaml")
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 
 app = FastAPI(title="HomeGPT Dashboard API")
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -78,7 +76,7 @@ async def ingress_root():
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="static")
 
-# ---------------- API routes ----------------
+# ---------------- API Routes ----------------
 @app.get("/api/status")
 def get_status():
     cfg = _load_config()
@@ -113,7 +111,6 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
         gpt = OpenAIClient()
         try:
             if mode == "passive":
-                # Use the same bullet creation logic as daily summary
                 if not EVENT_BUFFER:
                     summary = "No notable events recorded."
                 else:
@@ -131,13 +128,9 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                     actions = []
                     EVENT_BUFFER.clear()
             else:
-                # Active mode: snapshot states
                 states = await ha.states()
                 lines = [f"{s['entity_id']}={s['state']}" for s in states[:400]]
-                user = (
-                    f"Mode: {mode}\n"
-                    "Current states (subset):\n" + "\n".join(lines)
-                )
+                user = f"Mode: {mode}\nCurrent states (subset):\n" + "\n".join(lines)
                 plan = gpt.complete_json(SYSTEM_ACTIVE, user, schema=ACTIONS_JSON_SCHEMA)
                 summary = plan.get("text") or plan.get("summary") or "No summary."
                 actions = plan.get("actions") or []
@@ -171,7 +164,7 @@ def update_settings(settings: Settings):
     _save_config(cfg)
     return {"status": "ok"}
 
-# ---------------- Helpers ----------------
+# ---------------- Config Helpers ----------------
 def _load_config():
     if CONFIG_PATH.exists():
         return yaml.safe_load(CONFIG_PATH.read_text()) or {}
@@ -179,3 +172,34 @@ def _load_config():
 
 def _save_config(data):
     CONFIG_PATH.write_text(yaml.safe_dump(data))
+
+# ---------------- Background Event Listener ----------------
+async def ha_event_listener():
+    if not HAVE_REAL:
+        logger.warning("HA integration not available — event listener disabled.")
+        return
+
+    ha = HAClient()
+    while True:
+        try:
+            async for evt in ha.websocket_events():
+                try:
+                    data = {
+                        "ts": evt["time_fired"],
+                        "entity_id": evt["data"]["entity_id"],
+                        "from": evt["data"]["old_state"]["state"] if evt["data"]["old_state"] else None,
+                        "to": evt["data"]["new_state"]["state"] if evt["data"]["new_state"] else None,
+                    }
+                    EVENT_BUFFER.append(data)
+                    if len(EVENT_BUFFER) > 5000:
+                        EVENT_BUFFER.pop(0)
+                except Exception as e:
+                    logger.exception(f"Error processing event: {e}")
+        except Exception as e:
+            logger.error(f"HA websocket disconnected: {e}, reconnecting in 5s...")
+            await asyncio.sleep(5)
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(ha_event_listener())
+    logger.info("HomeGPT API started — background event listener running.")

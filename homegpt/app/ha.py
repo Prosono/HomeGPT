@@ -17,6 +17,7 @@ class HAClient:
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
         })
+        self._listeners = []  # callback functions for events
 
     async def close(self):
         await self.session.close()
@@ -41,20 +42,58 @@ class HAClient:
             data["notification_id"] = notification_id
         return await self.call_service("persistent_notification", "create", data)
 
+    def add_listener(self, callback):
+        """Register a callback that will be called with each event."""
+        self._listeners.append(callback)
+
+    async def _handle_event(self, event):
+        """Call all registered listeners with the event."""
+        for cb in self._listeners:
+            try:
+                await cb(event)
+            except Exception as e:
+                _LOGGER.error(f"Error in event listener {cb}: {e}")
+
     async def websocket_events(self):
-        async with websockets.connect(WS_URL) as ws:
-            # Authenticate
-            await ws.recv()  # auth_required
-            await ws.send(json.dumps({"type": "auth", "access_token": SUPERVISOR_TOKEN}))
-            msg = json.loads(await ws.recv())
-            assert msg.get("type") == "auth_ok", f"WS auth failed: {msg}"
+        """Persistent websocket listener with auto-reconnect."""
+        while True:
+            try:
+                _LOGGER.info("Connecting to Home Assistant WebSocket...")
+                async with websockets.connect(WS_URL) as ws:
+                    # Authenticate
+                    auth_msg = await ws.recv()  # auth_required
+                    _LOGGER.debug(f"Auth message: {auth_msg}")
+                    await ws.send(json.dumps({
+                        "type": "auth",
+                        "access_token": SUPERVISOR_TOKEN
+                    }))
+                    msg = json.loads(await ws.recv())
+                    if msg.get("type") != "auth_ok":
+                        raise Exception(f"WS auth failed: {msg}")
+                    _LOGGER.info("WebSocket authenticated")
 
-            # Subscribe to state_changed events
-            await ws.send(json.dumps({"id": 1, "type": "subscribe_events", "event_type": "state_changed"}))
-            await ws.recv()  # result ok
+                    # Subscribe to state_changed events
+                    await ws.send(json.dumps({
+                        "id": 1,
+                        "type": "subscribe_events",
+                        "event_type": "state_changed"
+                    }))
+                    result = json.loads(await ws.recv())
+                    if not result.get("success", False):
+                        raise Exception(f"Subscribe failed: {result}")
+                    _LOGGER.info("Subscribed to state_changed events")
 
-            while True:
-                raw = await ws.recv()
-                evt = json.loads(raw)
-                if evt.get("type") == "event":
-                    yield evt["event"]
+                    # Listen for events
+                    async for raw in ws:
+                        try:
+                            evt = json.loads(raw)
+                            if evt.get("type") == "event":
+                                _LOGGER.debug(f"WS Event: {evt['event']}")
+                                await self._handle_event(evt["event"])
+                        except json.JSONDecodeError:
+                            _LOGGER.warning(f"Invalid JSON from WS: {raw}")
+
+            except Exception as e:
+                _LOGGER.error(f"WebSocket error: {e}, retrying in 5s...")
+                await asyncio.sleep(5)
+
