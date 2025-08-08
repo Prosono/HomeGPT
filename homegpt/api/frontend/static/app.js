@@ -1,5 +1,5 @@
 async function loadStatus() {
-  const res = await fetch("/api/status");
+  const res = await fetch("status");
   const data = await res.json();
   document.getElementById("toggleMode").textContent = data.mode;
 }
@@ -7,12 +7,12 @@ async function loadStatus() {
 async function toggleMode() {
   const current = document.getElementById("toggleMode").textContent;
   const newMode = current === "passive" ? "active" : "passive";
-  await fetch(`/api/mode?mode=${newMode}`, { method: "POST" });
+  await fetch(`mode?mode=${encodeURIComponent(newMode)}`, { method: "POST" });
   loadStatus();
 }
 
 async function loadHistory() {
-  const res = await fetch("/api/history");
+  const res = await fetch("history");
   const data = await res.json();
   const table = document.getElementById("historyTable");
   table.innerHTML = "";
@@ -24,9 +24,13 @@ async function loadHistory() {
 }
 
 document.getElementById("toggleMode").addEventListener("click", toggleMode);
+
 document.getElementById("runAnalysis").addEventListener("click", async () => {
-  await fetch("/api/run", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode: document.getElementById("toggleMode").textContent }) });
+  await fetch("run", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mode: document.getElementById("toggleMode").textContent })
+  });
   loadHistory();
 });
 
