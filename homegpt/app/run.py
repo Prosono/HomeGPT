@@ -4,10 +4,10 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from .util import setup_logging, RateLimiter, next_time_of_day
-from .ha import HAClient
-from .openai_client import OpenAIClient
-from .policy import SYSTEM_PASSIVE, SYSTEM_ACTIVE, ACTIONS_JSON_SCHEMA
+from homegpt.util import setup_logging, RateLimiter, next_time_of_day
+from homegpt.ha import HAClient
+from homegpt.openai_client import OpenAIClient
+from homegpt.policy import SYSTEM_PASSIVE, SYSTEM_ACTIVE, ACTIONS_JSON_SCHEMA
 
 LANG = os.environ.get("LANGUAGE", "en")
 MODE = os.environ.get("MODE", "passive")
@@ -29,13 +29,13 @@ async def summarize_daily(ha: HAClient, gpt: OpenAIClient):
         if not EVENT_BUFFER:
             await ha.notify("HomeGPT Daily", "No notable events recorded today.")
             continue
-        # Build a compact log for the model
-        bullets = []
-        for e in EVENT_BUFFER[-2000:]:  # cap
-            bullets.append(f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}")
+        bullets = [
+            f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
+            for e in EVENT_BUFFER[-2000:]
+        ]
         user = (
             f"Language: {LANG}.\n"
-            f"Summarize today's home activity from these lines (newest last). \n"
+            f"Summarize today's home activity from these lines (newest last).\n"
             + "\n".join(bullets)
         )
         res = gpt.complete_json(SYSTEM_PASSIVE, user)
@@ -55,13 +55,13 @@ async def reactive_control(ha: HAClient, gpt: OpenAIClient):
         ts = datetime.now(timezone.utc).isoformat()
         EVENT_BUFFER.append({"ts": ts, "entity_id": entity_id, "from": old, "to": new})
 
-        if MODE != "active":
-            continue
-        if not entity_id:
+        if MODE != "active" or not entity_id:
             continue
 
-        # Only trigger model on allowlisted entities or key domains to keep token usage sane
-        trigger_ok = (entity_id in ALLOWLIST) or entity_id.split(".")[0] in {"binary_sensor", "sensor", "person", "device_tracker"}
+        trigger_ok = (
+            entity_id in ALLOWLIST
+            or entity_id.split(".")[0] in {"binary_sensor", "sensor", "person", "device_tracker"}
+        )
         if not trigger_ok:
             continue
 

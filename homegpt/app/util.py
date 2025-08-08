@@ -3,6 +3,7 @@ import logging
 from collections import deque
 from datetime import datetime, timedelta
 
+
 class RateLimiter:
     def __init__(self, max_per_hour: int):
         self.max_per_hour = max_per_hour
