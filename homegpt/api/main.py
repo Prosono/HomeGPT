@@ -1,4 +1,6 @@
 from fastapi import FastAPI, Request, Query
+from fastapi import FastAPI, Depends, HTTPException, Body
+from homegpt.app.main import EVENT_BUFFER  # import the buffer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -110,29 +112,43 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
         ha = HAClient()
         gpt = OpenAIClient()
         try:
-            # Snapshot some state to give the model context
-            states = await ha.states()
-            lines = [f"{s['entity_id']}={s['state']}" for s in states[:400]]
-            user = (
-                f"Mode: {mode}\n"
-                "Current states (subset):\n" + "\n".join(lines)
-            )
-            if mode == "active":
-                plan = gpt.complete_json(SYSTEM_ACTIVE, user, schema=ACTIONS_JSON_SCHEMA)
+            if mode == "passive":
+                # Use the same bullet creation logic as daily summary
+                if not EVENT_BUFFER:
+                    summary = "No notable events recorded."
+                else:
+                    bullets = [
+                        f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
+                        for e in EVENT_BUFFER[-2000:]
+                    ]
+                    user = (
+                        f"Language: {cfg.get('language', 'en')}.\n"
+                        f"Summarize recent home activity from these lines (newest last).\n"
+                        + "\n".join(bullets)
+                    )
+                    res = gpt.complete_json(SYSTEM_PASSIVE, user)
+                    summary = res.get("text") or json.dumps(res, indent=2)
+                    actions = []
+                    EVENT_BUFFER.clear()
             else:
-                plan = gpt.complete_json(SYSTEM_PASSIVE, user)
-
-            summary = plan.get("text") or plan.get("summary") or "No summary."
-            actions = plan.get("actions") or []
+                # Active mode: snapshot states
+                states = await ha.states()
+                lines = [f"{s['entity_id']}={s['state']}" for s in states[:400]]
+                user = (
+                    f"Mode: {mode}\n"
+                    "Current states (subset):\n" + "\n".join(lines)
+                )
+                plan = gpt.complete_json(SYSTEM_ACTIVE, user, schema=ACTIONS_JSON_SCHEMA)
+                summary = plan.get("text") or plan.get("summary") or "No summary."
+                actions = plan.get("actions") or []
         finally:
             await ha.close()
     else:
-        # Fallback for dev
         summary = f"Analysis in {mode} mode. Focus: {focus or 'General'}."
         actions = ["light.turn_off living_room", "climate.set_temperature bedroom 20°C"]
 
     row = db.add_analysis(mode, focus, summary, json.dumps(actions))
-    return {"status": "ok", "row": row}
+    return {"status": "ok", "summary": summary, "actions": actions, "row": row}
 
 @app.get("/api/history")
 def history():
