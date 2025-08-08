@@ -33,8 +33,9 @@ jobs:
       - name: Build and push (multi-arch)
         uses: docker/build-push-action@v6
         with:
-          context: ./homegpt
-          platforms: linux/amd64,linux/arm64,linux/arm/v7
-          push: true
-          tags: |
+            context: ./homegpt
+            file: ./homegpt/Dockerfile
+            platforms: linux/amd64,linux/arm64,linux/arm/v7
+            push: true
+            tags: |
             ghcr.io/prosono/homegpt:0.1.0
