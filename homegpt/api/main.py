@@ -1,14 +1,18 @@
-from fastapi import FastAPI, APIRouter, Request
+from fastapi import FastAPI, Request, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
-import logging, json, yaml
+import json
+import yaml
+import logging
 
-# ---- Models (fallback if models.py missing)
+# Import real models if available
 try:
     from homegpt.api.models import AnalysisRequest, Settings
-except Exception:
+    from homegpt.api import db, analyzer
+except ImportError:
+    # Fallback for dev
     from pydantic import BaseModel
     class AnalysisRequest(BaseModel):
         mode: str
@@ -23,54 +27,47 @@ except Exception:
         dry_run: bool | None = None
         log_level: str | None = None
         language: str | None = None
+    import sqlite3
+    class db:
+        @staticmethod
+        def init_db(): pass
+        @staticmethod
+        def get_analyses(limit): return []
+        @staticmethod
+        def get_analysis(aid): return {}
+        @staticmethod
+        def add_analysis(mode, focus, summary, actions): pass
+    analyzer = None  # placeholder
 
-from homegpt.api import db
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("HomeGPT")
 
 CONFIG_PATH = Path("/config/homegpt_config.yaml")
-
-# Find frontend in api/frontend or ../frontend
-candidates = [Path(__file__).parent / "frontend", Path(__file__).parent.parent / "frontend"]
-for p in candidates:
-    if (p / "index.html").exists():
-        FRONTEND_DIR = p
-        break
-else:
-    FRONTEND_DIR = candidates[0]
+FRONTEND_DIR = Path(__file__).parent / "frontend"
 
 app = FastAPI(title="HomeGPT Dashboard API")
 
-# Simple request logging so you can see if the JS is hitting the API
-logging.basicConfig(level=logging.INFO)
-@app.middleware("http")
-async def log_requests(request: Request, call_next):
-    logging.info("→ %s %s", request.method, request.url)
-    resp = await call_next(request)
-    logging.info("← %s %s", resp.status_code, request.url.path)
-    return resp
-
-# CORS not strictly needed under ingress, but harmless
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# Ensure DB exists
 db.init_db()
 
-# ---------- Frontend ----------
+# ---------------- Ingress UI ----------------
 @app.get("/")
-async def root():
+async def ingress_root():
     index_file = FRONTEND_DIR / "index.html"
     if index_file.exists():
         return FileResponse(index_file)
-    return {"error": f"Dashboard not found at {index_file}"}
+    return {"error": "Dashboard frontend not found"}
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="static")
 
-# ---------- API (under /api) ----------
-api = APIRouter()
-
-@api.get("/status")
+# ---------------- API routes ----------------
+@app.get("/api/status")
 def get_status():
     cfg = _load_config()
     last = db.get_analyses(1)
@@ -81,43 +78,51 @@ def get_status():
         "last_analysis": last[0] if last else None,
     }
 
-@api.post("/mode")
-def set_mode(mode: str):
+@app.post("/api/mode")
+def set_mode(mode: str = Query(...)):
+    logger.info(f"Setting mode to: {mode}")
     cfg = _load_config()
     cfg["mode"] = mode
     _save_config(cfg)
     return {"status": "ok", "mode": mode}
 
-@api.post("/run")
+@app.post("/api/run")
 def run_analysis(request: AnalysisRequest):
-    fake_summary = f"Analysis in {request.mode} mode. Focus: {request.focus or 'General'}."
-    fake_actions = json.dumps(["light.turn_off living_room", "climate.set_temperature bedroom 20°C"])
-    db.add_analysis(request.mode, request.focus or "", fake_summary, fake_actions)
-    return {"status": "ok", "summary": fake_summary, "actions": json.loads(fake_actions)}
+    logger.info(f"Running analysis manually from UI: mode={request.mode}, focus={request.focus}")
+    if analyzer:
+        summary, actions = analyzer.run_analysis(mode=request.mode, focus=request.focus)
+    else:
+        # Fallback fake result if analyzer is not wired up
+        summary = f"Analysis in {request.mode} mode. Focus: {request.focus or 'General'}."
+        actions = [
+            "light.turn_off living_room",
+            "climate.set_temperature bedroom 20°C",
+        ]
+    db.add_analysis(request.mode, request.focus or "", summary, json.dumps(actions))
+    return {"status": "ok", "summary": summary, "actions": actions}
 
-@api.get("/history")
+@app.get("/api/history")
 def history():
     return db.get_analyses(50)
 
-@api.get("/history/{analysis_id}")
+@app.get("/api/history/{analysis_id}")
 def get_history_item(analysis_id: int):
     return db.get_analysis(analysis_id)
 
-@api.get("/settings")
+@app.get("/api/settings")
 def get_settings():
     return _load_config()
 
-@api.post("/settings")
+@app.post("/api/settings")
 def update_settings(settings: Settings):
+    logger.info(f"Updating settings from UI: {settings}")
     cfg = _load_config()
     data = {k: v for k, v in settings.dict().items() if v is not None}
     cfg.update(data)
     _save_config(cfg)
     return {"status": "ok"}
 
-app.include_router(api, prefix="/api")
-
-# ---------- helpers ----------
+# ---------------- Helpers ----------------
 def _load_config():
     if CONFIG_PATH.exists():
         return yaml.safe_load(CONFIG_PATH.read_text()) or {}
