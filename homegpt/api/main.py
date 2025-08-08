@@ -42,6 +42,16 @@ except ImportError:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("HomeGPT")
 
+# at top: from homegpt.api import db
+# try to import real clients:
+try:
+    from homegpt.app.ha import HAClient
+    from homegpt.app.openai_client import OpenAIClient
+    from homegpt.app.policy import SYSTEM_PASSIVE, SYSTEM_ACTIVE, ACTIONS_JSON_SCHEMA
+    HAVE_REAL = True
+except Exception:
+    HAVE_REAL = False
+
 CONFIG_PATH = Path("/config/homegpt_config.yaml")
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 
@@ -87,19 +97,42 @@ def set_mode(mode: str = Query(...)):
     return {"status": "ok", "mode": mode}
 
 @app.post("/api/run")
-def run_analysis(request: AnalysisRequest):
-    logger.info(f"Running analysis manually from UI: mode={request.mode}, focus={request.focus}")
-    if analyzer:
-        summary, actions = analyzer.run_analysis(mode=request.mode, focus=request.focus)
+async def run_analysis(request: AnalysisRequest = Body(...)):
+    cfg = _load_config()
+    mode = (request.mode or cfg.get("mode", "passive")).lower()
+    focus = request.focus or ""
+    logger.info("Run analysis (UI): mode=%s focus=%s", mode, focus)
+
+    summary = ""
+    actions = []
+
+    if HAVE_REAL:
+        ha = HAClient()
+        gpt = OpenAIClient()
+        try:
+            # Snapshot some state to give the model context
+            states = await ha.states()
+            lines = [f"{s['entity_id']}={s['state']}" for s in states[:400]]
+            user = (
+                f"Mode: {mode}\n"
+                "Current states (subset):\n" + "\n".join(lines)
+            )
+            if mode == "active":
+                plan = gpt.complete_json(SYSTEM_ACTIVE, user, schema=ACTIONS_JSON_SCHEMA)
+            else:
+                plan = gpt.complete_json(SYSTEM_PASSIVE, user)
+
+            summary = plan.get("text") or plan.get("summary") or "No summary."
+            actions = plan.get("actions") or []
+        finally:
+            await ha.close()
     else:
-        # Fallback fake result if analyzer is not wired up
-        summary = f"Analysis in {request.mode} mode. Focus: {request.focus or 'General'}."
-        actions = [
-            "light.turn_off living_room",
-            "climate.set_temperature bedroom 20°C",
-        ]
-    db.add_analysis(request.mode, request.focus or "", summary, json.dumps(actions))
-    return {"status": "ok", "summary": summary, "actions": actions}
+        # Fallback for dev
+        summary = f"Analysis in {mode} mode. Focus: {focus or 'General'}."
+        actions = ["light.turn_off living_room", "climate.set_temperature bedroom 20°C"]
+
+    row = db.add_analysis(mode, focus, summary, json.dumps(actions))
+    return {"status": "ok", "row": row}
 
 @app.get("/api/history")
 def history():
