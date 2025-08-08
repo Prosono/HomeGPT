@@ -20,14 +20,17 @@ class HAClient:
         self._listeners = []  # callback functions for events
 
     async def close(self):
+        """Close aiohttp session."""
         await self.session.close()
 
     async def states(self):
+        """Get all entity states from Home Assistant."""
         async with self.session.get(f"{BASE_HTTP}/states") as r:
             r.raise_for_status()
             return await r.json()
 
     async def call_service(self, domain: str, service: str, data: dict):
+        """Call a Home Assistant service."""
         url = f"{BASE_HTTP}/services/{domain}/{service}"
         async with self.session.post(url, json=data) as r:
             txt = await r.text()
@@ -37,6 +40,7 @@ class HAClient:
             return json.loads(txt) if txt else {}
 
     async def notify(self, title: str, message: str, notification_id: str | None = None):
+        """Send a persistent notification to Home Assistant."""
         data = {"title": title, "message": message}
         if notification_id:
             data["notification_id"] = notification_id
@@ -55,18 +59,23 @@ class HAClient:
                 _LOGGER.error(f"Error in event listener {cb}: {e}")
 
     async def websocket_events(self):
-        """Persistent websocket listener with auto-reconnect."""
+        """
+        Async generator that yields state_changed events from Home Assistant.
+        Will automatically reconnect if the connection drops.
+        """
         while True:
             try:
                 _LOGGER.info("Connecting to Home Assistant WebSocket...")
                 async with websockets.connect(WS_URL) as ws:
                     # Authenticate
-                    auth_msg = await ws.recv()  # auth_required
+                    auth_msg = await ws.recv()  # Expect auth_required
                     _LOGGER.debug(f"Auth message: {auth_msg}")
+
                     await ws.send(json.dumps({
                         "type": "auth",
                         "access_token": SUPERVISOR_TOKEN
                     }))
+
                     msg = json.loads(await ws.recv())
                     if msg.get("type") != "auth_ok":
                         raise Exception(f"WS auth failed: {msg}")
@@ -83,17 +92,23 @@ class HAClient:
                         raise Exception(f"Subscribe failed: {result}")
                     _LOGGER.info("Subscribed to state_changed events")
 
-                    # Listen for events
+                    # Yield incoming events
                     async for raw in ws:
                         try:
                             evt = json.loads(raw)
                             if evt.get("type") == "event":
-                                _LOGGER.debug(f"WS Event: {evt['event']}")
-                                await self._handle_event(evt["event"])
+                                event_data = evt["event"]
+                                _LOGGER.debug(f"WS Event: {event_data}")
+
+                                # Send to registered listeners
+                                await self._handle_event(event_data)
+
+                                # Yield to async for consumers
+                                yield event_data
+
                         except json.JSONDecodeError:
                             _LOGGER.warning(f"Invalid JSON from WS: {raw}")
 
             except Exception as e:
                 _LOGGER.error(f"WebSocket error: {e}, retrying in 5s...")
                 await asyncio.sleep(5)
-
