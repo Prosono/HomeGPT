@@ -24,12 +24,17 @@ jobs:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # 👇 Make a lowercase owner for GHCR tags
+      - name: Lowercase owner
+        id: owner
+        run: echo "lower=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
       - uses: docker/build-push-action@v5
         with:
-          context: .                 # <— build from repo root
-          file: ./Dockerfile         # <— your Dockerfile is here
+          context: .
+          file: ./Dockerfile
           platforms: linux/amd64,linux/arm64,linux/arm/v7
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/homegpt:0.1.1
-            ghcr.io/${{ github.repository_owner }}/homegpt:latest
+            ghcr.io/${{ steps.owner.outputs.lower }}/homegpt:0.1.1
+            ghcr.io/${{ steps.owner.outputs.lower }}/homegpt:latest
