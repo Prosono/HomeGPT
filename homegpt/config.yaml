@@ -2,7 +2,7 @@ name: HomeGPT
 slug: homegpt
 version: "0.1.0"
 description: "Streams HA events to OpenAI; summarizes (passive) or controls (active) with allow-lists and rate limits."
-url: https://github.com/Prosono/HomeGPT
+url: https://github.com/prosono/homegpt
 startup: application
 init: false
 image: "ghcr.io/prosono/homegpt-{arch}"
