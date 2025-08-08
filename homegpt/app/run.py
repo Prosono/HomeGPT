@@ -4,10 +4,10 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from util import setup_logging, RateLimiter, next_time_of_day
-from ha import HAClient
-from openai_client import OpenAIClient
-from policy import SYSTEM_PASSIVE, SYSTEM_ACTIVE, ACTIONS_JSON_SCHEMA
+from .util import setup_logging, RateLimiter, next_time_of_day
+from .ha import HAClient
+from .openai_client import OpenAIClient
+from .policy import SYSTEM_PASSIVE, SYSTEM_ACTIVE, ACTIONS_JSON_SCHEMA
 
 LANG = os.environ.get("LANGUAGE", "en")
 MODE = os.environ.get("MODE", "passive")
