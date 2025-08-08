@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>HomeGPT Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="bg-gray-100 text-gray-900">
+  <div class="max-w-6xl mx-auto p-6">
+    <h1 class="text-3xl font-bold mb-6">HomeGPT Dashboard</h1>
+
+    <!-- Mode toggle -->
+    <div class="flex items-center mb-6">
+      <span class="mr-4 font-semibold">Mode:</span>
+      <button id="toggleMode" class="px-4 py-2 bg-blue-500 text-white rounded">Loading...</button>
+    </div>
+
+    <!-- Start analysis -->
+    <div class="mb-6">
+      <button id="runAnalysis" class="px-4 py-2 bg-green-500 text-white rounded">Start New Analysis</button>
+    </div>
+
+    <!-- History table -->
+    <table class="w-full border border-gray-300 text-left">
+      <thead>
+        <tr class="bg-gray-200">
+          <th class="p-2">Time</th>
+          <th class="p-2">Mode</th>
+          <th class="p-2">Summary</th>
+        </tr>
+      </thead>
+      <tbody id="historyTable"></tbody>
+    </table>
+
+    <!-- Chart -->
+    <canvas id="actionsChart" class="mt-8"></canvas>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
