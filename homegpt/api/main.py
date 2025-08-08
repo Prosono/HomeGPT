@@ -1,13 +1,15 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import json
 import yaml
 
-# ---- Models (import or fallback) ----
+# ---- Models ----
 try:
-    from homegpt.api.models import AnalysisRequest, Settings  # if you created models.py
-except Exception:
+    from homegpt.api.models import AnalysisRequest, Settings
+except ImportError:
     from pydantic import BaseModel
     class AnalysisRequest(BaseModel):
         mode: str
@@ -29,9 +31,12 @@ from homegpt.api import db
 
 CONFIG_PATH = Path("/config/homegpt_config.yaml")
 
+# Path to dashboard frontend inside the container
+FRONTEND_DIR = Path(__file__).parent / "frontend"
+
 app = FastAPI(title="HomeGPT Dashboard API")
 
-# CORS (adjust in prod)
+# CORS (optional for ingress)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -42,6 +47,19 @@ app.add_middleware(
 # Ensure DB exists
 db.init_db()
 
+# ---------------- Ingress UI routes ----------------
+# Serve index.html for root
+@app.get("/")
+async def ingress_root():
+    index_file = FRONTEND_DIR / "index.html"
+    if index_file.exists():
+        return FileResponse(index_file)
+    return {"error": "Dashboard frontend not found in container."}
+
+# Serve static assets (JS, CSS, images)
+app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="static")
+
+# ---------------- API routes ----------------
 @app.get("/status")
 def get_status():
     config = _load_config()
@@ -62,7 +80,6 @@ def set_mode(mode: str):
 
 @app.post("/run")
 def run_analysis(request: AnalysisRequest):
-    # Placeholder AI; swap in your real analysis
     fake_summary = f"Analysis in {request.mode} mode. Focus: {request.focus or 'General'}."
     fake_actions = json.dumps([
         "light.turn_off living_room",
@@ -85,14 +102,13 @@ def get_settings():
 
 @app.post("/settings")
 def update_settings(settings: Settings):
-    # merge with existing config, keep unspecified keys
     cfg = _load_config()
     data = {k: v for k, v in settings.dict().items() if v is not None}
     cfg.update(data)
     _save_config(cfg)
     return {"status": "ok"}
 
-# ------------- helpers -------------
+# ---------------- Helpers ----------------
 def _load_config():
     if CONFIG_PATH.exists():
         return yaml.safe_load(CONFIG_PATH.read_text()) or {}
