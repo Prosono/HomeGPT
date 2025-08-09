@@ -19,19 +19,33 @@ const snippet = (text, max = 140) => {
   return t.length > max ? t.slice(0, max - 1) + "…" : t;
 };
 
+// Category → icon (MDI)
 const categoryIcon = (title = "") => {
   const t = title.toLowerCase();
-  if (/\bsecurity\b/.test(t))            return '<i class="mdi mdi-shield-lock-outline"></i>';
-  if (/\bcomfort\b/.test(t))             return '<i class="mdi mdi-sofa-outline"></i>';
-  if (/\benergy\b/.test(t))              return '<i class="mdi mdi-flash-outline"></i>';
-  if (/\banomal(y|ies)\b/.test(t))       return '<i class="mdi mdi-alert-circle-outline"></i>';
-  if (/estimated\s+presence|occupancy/i.test(title)) return '<i class="mdi mdi-account-group-outline"></i>';
-  if (/recommendations|next steps/i.test(title))     return '<i class="mdi mdi-lightbulb-on-outline"></i>';
-  if (/camera|motion/i.test(title))      return '<i class="mdi mdi-cctv"></i>';
-  if (/wifi|network/i.test(title))       return '<i class="mdi mdi-wifi"></i>';
-  if (/temperature|humidity|climate/i.test(title))   return '<i class="mdi mdi-thermometer"></i>';
+  if (/\bsecurity\b/.test(t))                       return '<i class="mdi mdi-shield-lock-outline"></i>';
+  if (/\bcomfort\b/.test(t))                        return '<i class="mdi mdi-thermometer"></i>';
+  if (/\benergy\b/.test(t))                         return '<i class="mdi mdi-flash-outline"></i>';
+  if (/\banomal(y|ies)\b/.test(t))                  return '<i class="mdi mdi-alert-circle-outline"></i>';
+  if (/estimated\s+presence|occupancy/i.test(t))    return '<i class="mdi mdi-account-group-outline"></i>';
+  if (/recommendations|next steps/i.test(t))        return '<i class="mdi mdi-lightbulb-on-outline"></i>';
   return '<i class="mdi mdi-subtitles-outline"></i>';
 };
+
+// Category → theme class
+const categoryClass = (title = "") => {
+  const t = title.toLowerCase();
+  if (/\bsecurity\b/.test(t))                       return "theme-security";
+  if (/\bcomfort\b/.test(t))                        return "theme-comfort";
+  if (/\benergy\b/.test(t))                         return "theme-energy";
+  if (/\banomal(y|ies)\b/.test(t))                  return "theme-anomalies";
+  if (/estimated\s+presence|occupancy/i.test(t))    return "theme-presence";
+  if (/recommendations|next steps/i.test(t))        return "theme-reco";
+  return "theme-generic";
+};
+
+// Detects the first “summary” heading so we can render it as a hero
+const isSummaryTitle = (txt = "") =>
+  /summary/i.test(txt) && !/energy|security|comfort|anomal/i.test(txt);
 
 
 async function jsonFetch(url, opts = {}) {
@@ -133,9 +147,9 @@ async function runAnalysisNow() {
 
 // ---------- Modal (with Markdown) ----------
 function openModal(row) {
-  const overlay = $("detailsOverlay");
-  const title   = $("modalTitle");
-  const meta    = $("modalMeta");
+  const overlay   = $("detailsOverlay");
+  const title     = $("modalTitle");
+  const meta      = $("modalMeta");
   const container = $("modalSummary");
 
   title.innerHTML = `${modeIcon(row.mode)} <span class="capitalize">${row.mode ?? "passive"}</span> summary`;
@@ -148,47 +162,68 @@ function openModal(row) {
   // Group tokens by headings (h1–h4)
   const sections = [];
   let current = { title: null, bodyTokens: [] };
-  const pushCurrent = () => {
+  const flush = () => {
     if (current.title || current.bodyTokens.length) sections.push(current);
     current = { title: null, bodyTokens: [] };
   };
-
   for (const tok of tokens) {
-    if (tok.type === "heading" && tok.depth <= 4) { pushCurrent(); current.title = tok.text; }
+    if (tok.type === "heading" && tok.depth <= 4) { flush(); current.title = tok.text; }
     else { current.bodyTokens.push(tok); }
   }
-  pushCurrent();
+  flush();
 
-  // Build grid
+  // Build: hero (first “Summary …” section) + masonry for the rest
   container.innerHTML = "";
+
+  // 1) Hero banner (optional)
+  const first = sections[0];
+  if (first && isSummaryTitle(first.title || "")) {
+    const hero = document.createElement("div");
+    hero.className = "modal-hero";
+    const heroIcon = '<i class="mdi mdi-home-analytics-outline"></i>';
+    const heroTitle = first.title || "Summary";
+    let heroHtml = "";
+    try { heroHtml = marked.parser(first.bodyTokens); }
+    catch { heroHtml = `<p>${raw}</p>`; }
+
+    hero.innerHTML = `
+      <div class="hero-head">
+        ${heroIcon}
+        <span>${heroTitle}</span>
+      </div>
+      <div class="hero-body">${heroHtml}</div>
+    `;
+    container.appendChild(hero);
+    sections.shift(); // remove from list; remaining go to masonry
+  }
+
+  // 2) Masonry wrap
   const wrap = document.createElement("div");
-  wrap.className = "modal-sections";     // CSS grid handles columns responsively
+  wrap.className = "modal-masonry"; // CSS columns → variable height cards
   container.appendChild(wrap);
 
   sections.forEach((sec, idx) => {
+    const t = sec.title || (idx === 0 ? "Details" : `Section ${idx + 1}`);
+    const theme = categoryClass(t);
+
     const card = document.createElement("div");
-    card.className = "modal-section";
+    card.className = `modal-section ${theme}`;
 
     const h = document.createElement("h3");
-    const titleText = sec.title || (idx === 0 ? "Summary" : "Details");
-    h.innerHTML = `${categoryIcon(titleText)} ${titleText}`;
+    h.innerHTML = `${categoryIcon(t)} ${t}`;
     card.appendChild(h);
 
     const body = document.createElement("div");
     body.className = "section-body";
-
     let html = "";
     try { html = marked.parser(sec.bodyTokens); }
     catch { html = `<p>${raw}</p>`; }
     body.innerHTML = html;
     card.appendChild(body);
 
-    // Try charting numeric series found in this section
+    // Numbers → tiny line chart
     const plain = body.textContent || "";
-    const nums = (plain.match(/-?\d+(?:\.\d+)?/g) || [])
-      .map(parseFloat)
-      .filter((n) => !isNaN(n));
-
+    const nums = (plain.match(/-?\d+(?:\.\d+)?/g) || []).map(parseFloat).filter(n => !isNaN(n));
     if (nums.length >= 3) {
       const unit =
         plain.includes("°C") ? "°C" :
@@ -206,27 +241,17 @@ function openModal(row) {
         const labels = nums.map((_, i) => `${i + 1}`);
         new Chart(canvas.getContext("2d"), {
           type: "line",
-          data: {
-            labels,
-            datasets: [{
-              data: nums,
-              label: unit ? `Values (${unit})` : "Values",
-              tension: 0.3,
-              pointRadius: 0,
-              borderWidth: 2,
-            }],
-          },
+          data: { labels, datasets: [{ data: nums, label: unit || "Values", tension: 0.35, pointRadius: 0, borderWidth: 2 }] },
           options: {
-            responsive: true,
-            maintainAspectRatio: false,
+            responsive: true, maintainAspectRatio: false,
             plugins: { legend: { display: !!unit } },
             scales: {
               x: { display: false },
-              y: { ticks: { color: "#e5e7eb" }, grid: { color: "rgba(255,255,255,0.1)" } }
+              y: { ticks: { color: "#e5e7eb" }, grid: { color: "rgba(255,255,255,0.10)" } }
             }
           }
         });
-        canvas.style.height = "140px";
+        canvas.style.height = "120px";
       } catch (e) {
         console.warn("Chart render failed:", e);
       }

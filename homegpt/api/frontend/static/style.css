@@ -91,61 +91,108 @@ button:hover {
   color: #f7c76b; /* warm accent */
 }
 
-/* Panel sizing: square-ish, scrollable, responsive */
+/* =========================================================
+   Modal layout: hero + masonry (variable-height cards)
+   ========================================================= */
+
+/* Square-ish, scrollable panel (already added earlier) */
 .modal-panel {
-  /* cap to viewport; prefer a square box that fits both directions */
   width: min(92vw, 1100px);
   height: min(92vh, 1100px);
   overflow: auto;
 }
 
-/* Container for section cards (we’ll toggle columns at breakpoints) */
-.modal-sections {
-  display: grid;
-  grid-template-columns: 1fr;   /* mobile default: 1 column */
-  gap: 14px;
-}
-
-/* 2 columns on medium screens, 3 on large if there’s room */
-@media (min-width: 720px) {
-  .modal-sections { grid-template-columns: 1fr 1fr; }
-}
-@media (min-width: 1200px) {
-  .modal-sections { grid-template-columns: 1fr 1fr; } /* keep 2 cols for readability */
-}
-
-/* Section card style */
-.modal-section {
+/* Hero banner at the top */
+.modal-hero {
+  border-radius: 18px;
+  padding: 18px 18px 14px;
+  margin-bottom: 16px;
+  backdrop-filter: blur(8px);
   border: 1px solid rgba(255,255,255,0.10);
-  border-radius: 14px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.05));
-  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
-  padding: 14px;
-  min-width: 0; /* prevent grid overflow */
+  background: radial-gradient(120% 120% at 10% -10%, rgba(99,102,241,0.35), rgba(2,6,23,0.5) 55%) ,
+              linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.04));
+  box-shadow: 0 12px 28px rgba(0,0,0,0.45);
 }
-
-.modal-section h3 {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 700;
-  color: #c7d2fe;
+.modal-hero .hero-head {
+  display: flex; align-items: center; gap: 10px;
+  font-weight: 800; color: #e0e7ff; font-size: 1.1rem;
   margin-bottom: 6px;
 }
+.modal-hero .hero-head i { font-size: 1.3rem; }
+.modal-hero .hero-body { color: #e5e7eb; opacity: 0.95; }
 
-.modal-section .section-body {
-  color: #e5e7eb;
-  font-size: 0.95rem;
-  line-height: 1.45;
+/* Masonry columns for variable heights */
+.modal-masonry {
+  column-count: 1;
+  column-gap: 14px;
 }
+@media (min-width: 720px)  { .modal-masonry { column-count: 2; } }
+@media (min-width: 1220px) { .modal-masonry { column-count: 3; } }
 
-/* Chart box inside a section */
-.section-chart {
-  margin-top: 10px;
-  background: rgba(0,0,0,0.25);
-  border-radius: 10px;
-  padding: 8px;
+/* Each section card flows in columns; avoid breaking inside */
+.modal-section {
+  display: inline-block; /* key for CSS columns */
+  width: 100%;
+  break-inside: avoid;
+  margin: 0 0 14px;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 16px;
+  padding: 14px;
+  box-shadow: 0 10px 24px rgba(0,0,0,0.35);
+  background: linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.05));
 }
+.modal-section h3 {
+  display: flex; align-items: center; gap: 8px;
+  font-weight: 800; color: #e5e7eb; margin-bottom: 6px;
+}
+.modal-section h3 i { opacity: .9; }
+.modal-section .section-body { color: #e5e7eb; font-size: 0.95rem; }
+.section-chart { margin-top: 10px; background: rgba(0,0,0,0.25); border-radius: 10px; padding: 8px; }
 
+/* =========================================================
+   Category themes (Apple-inspired subtle gradients)
+   ========================================================= */
+.theme-security {
+  background:
+    radial-gradient(150% 140% at -10% -20%, rgba(239,68,68,0.25), transparent 55%),
+    linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.04));
+  border-color: rgba(239,68,68,0.28);
+}
+.theme-comfort {
+  background:
+    radial-gradient(150% 140% at -10% -20%, rgba(59,130,246,0.25), transparent 55%),
+    linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.04));
+  border-color: rgba(59,130,246,0.28);
+}
+.theme-energy {
+  background:
+    radial-gradient(150% 140% at -10% -20%, rgba(16,185,129,0.28), transparent 55%),
+    linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.04));
+  border-color: rgba(16,185,129,0.30);
+}
+.theme-anomalies {
+  background:
+    radial-gradient(150% 140% at -10% -20%, rgba(245,158,11,0.30), transparent 55%),
+    linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.04));
+  border-color: rgba(245,158,11,0.32);
+}
+.theme-presence {
+  background:
+    radial-gradient(150% 140% at -10% -20%, rgba(139,92,246,0.30), transparent 55%),
+    linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.04));
+  border-color: rgba(139,92,246,0.32);
+}
+.theme-reco {
+  background:
+    radial-gradient(150% 140% at -10% -20%, rgba(20,184,166,0.28), transparent 55%),
+    linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.04));
+  border-color: rgba(20,184,166,0.30);
+}
+.theme-generic {
+  background:
+    radial-gradient(150% 140% at -10% -20%, rgba(96,165,250,0.18), transparent 55%),
+    linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.04));
+  border-color: rgba(96,165,250,0.22);
+}
 /* Make the entire overlay scroll on mobile if needed */
 #detailsOverlay { overflow: auto; }
