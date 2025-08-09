@@ -179,7 +179,29 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                 "light.turn_off living_room",
                 "climate.set_temperature bedroom 20°C",
             ]
+        # Persist the analysis
         row = db.add_analysis(mode, focus, summary, json.dumps(actions))
+
+        # Send a persistent notification for manual runs so the user sees the
+        # result in Home Assistant immediately.  The daily summariser and
+        # reactive controller already send their own notifications.
+        if HAVE_REAL:
+            try:
+                ha_notify = HAClient()
+                # Only include the first 500 characters of the summary in the
+                # notification to avoid overwhelming the UI; the full text is
+                # available in the history.
+                notify_text = summary if len(summary) <= 500 else summary[:497] + "…"
+                await ha_notify.notify("HomeGPT – Analysis", notify_text)
+            except Exception as notify_exc:
+                logger.warning(f"Failed to send notification: {notify_exc}")
+            finally:
+                # ensure the client is closed
+                try:
+                    await ha_notify.close()
+                except Exception:
+                    pass
+
         return {"status": "ok", "summary": summary, "actions": actions, "row": row}
     except Exception as exc:
         logger.exception("Error in run_analysis: %s", exc)
