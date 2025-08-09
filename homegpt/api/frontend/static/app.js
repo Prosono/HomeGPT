@@ -117,27 +117,131 @@ async function runAnalysisNow() {
 }
 
 // ---------- Modal (with Markdown) ----------
+// ---------- Modal (sectioned + Markdown + charts) ----------
 function openModal(row) {
   const overlay = $("detailsOverlay");
   const title   = $("modalTitle");
   const meta    = $("modalMeta");
-  const summary = $("modalSummary");
+  const container = $("modalSummary");
 
   title.innerHTML = `${modeIcon(row.mode)} <span class="capitalize">${row.mode ?? "passive"}</span> summary`;
   meta.textContent = [row.ts, row.focus ? `Focus: ${row.focus}` : ""].filter(Boolean).join(" • ");
 
-  // Render Markdown -> HTML (marked loaded via CDN in index.html)
-  try {
-    summary.innerHTML = marked.parse(row.summary ?? "(No summary)");
-  } catch {
-    summary.textContent = row.summary ?? "(No summary)";
+  // Parse markdown into tokens using marked
+  const raw = row.summary ?? "(No summary)";
+  let tokens = [];
+  try { tokens = marked.lexer(raw); } catch { container.textContent = raw; }
+
+  // Group tokens by headings into sections
+  const sections = [];
+  let current = { title: null, bodyTokens: [] };
+
+  const pushCurrent = () => {
+    if (current.title || current.bodyTokens.length) sections.push(current);
+    current = { title: null, bodyTokens: [] };
+  };
+
+  for (const tok of tokens) {
+    if (tok.type === "heading" && tok.depth <= 4) {
+      // Start a new section
+      pushCurrent();
+      current.title = tok.text;
+    } else {
+      current.bodyTokens.push(tok);
+    }
   }
+  pushCurrent();
+
+  // If the first "section" is a single title like "Summary of Recent Home Activity",
+  // it will have title set and empty body; we keep it as a header card anyway.
+
+  // Build DOM
+  container.innerHTML = "";
+  const wrap = document.createElement("div");
+  wrap.className = "modal-sections";
+  container.appendChild(wrap);
+
+  sections.forEach((sec, idx) => {
+    const card = document.createElement("div");
+    card.className = "modal-section";
+
+    const h = document.createElement("h3");
+    h.innerHTML = `<i class="mdi mdi-subtitles-outline"></i>${sec.title || (idx === 0 ? "Summary" : "Details")}`;
+    card.appendChild(h);
+
+    const body = document.createElement("div");
+    body.className = "section-body";
+
+    // Render the body tokens for this section back to HTML
+    let html = "";
+    try {
+      html = marked.parser(sec.bodyTokens);
+    } catch {
+      html = `<p>${raw}</p>`;
+    }
+    body.innerHTML = html;
+    card.appendChild(body);
+
+    // Extract numbers from this section's plain text for charting
+    const plain = body.textContent || "";
+    const nums = (plain.match(/-?\d+(?:\.\d+)?/g) || []).map(parseFloat).filter(n => !isNaN(n));
+    // Make the chart if we have at least 3 values (so it looks meaningful)
+    if (nums.length >= 3) {
+      const unit =
+        plain.includes("°C") ? "°C" :
+        plain.includes("kWh") ? "kWh" :
+        plain.includes("kW")  ? "kW"  :
+        plain.match(/Mb\/?s|Mbps/i) ? "Mbps" :
+        "";
+
+      const chartBox = document.createElement("div");
+      chartBox.className = "section-chart";
+      const canvas = document.createElement("canvas");
+      chartBox.appendChild(canvas);
+      card.appendChild(chartBox);
+
+      // Build simple line chart (Chart.js defaults for color/theme are fine)
+      try {
+        // Labels: 1..N or try to infer range phrases: not necessary for now
+        const labels = nums.map((_, i) => `${i + 1}`);
+        new Chart(canvas.getContext("2d"), {
+          type: "line",
+          data: {
+            labels,
+            datasets: [{
+              data: nums,
+              label: unit ? `Values (${unit})` : "Values",
+              tension: 0.3,
+              pointRadius: 0,
+              borderWidth: 2,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: !!unit } },
+            scales: {
+              x: { display: false },
+              y: { ticks: { color: "#e5e7eb" }, grid: { color: "rgba(255,255,255,0.08)" } }
+            }
+          }
+        });
+        // Give the canvas some height
+        canvas.style.height = "140px";
+      } catch (e) {
+        console.warn("Chart render failed:", e);
+      }
+    }
+
+    wrap.appendChild(card);
+  });
 
   overlay.classList.remove("hidden");
   document.addEventListener("keydown", escClose);
   $("overlayBackdrop").addEventListener("click", closeModal, { once: true });
   $("modalClose").addEventListener("click", closeModal, { once: true });
 }
+
 
 function escClose(e) { if (e.key === "Escape") closeModal(); }
 function closeModal() {
