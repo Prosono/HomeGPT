@@ -1,11 +1,32 @@
+"""
+FastAPI application serving the HomeGPT dashboard and API endpoints.
+
+This version introduces two notable improvements:
+
+1.  The ``run_analysis`` endpoint now wraps its core logic in a
+    ``try/except`` block and returns a ``500`` JSON response with an
+    error message if something goes wrong.  This prevents uncaught
+    exceptions from bubbling up to the client and provides clearer
+    feedback when, for example, OpenAI or Home Assistant calls fail.
+
+2.  The request model for ``run_analysis`` has been updated (see
+    ``homegpt/api/models.py``) so that the ``mode`` field is optional.
+    The handler uses the configured default mode if none is supplied.
+
+The rest of the API is unchanged: it serves a small ingress UI, exposes
+endpoints to query and update settings, start analyses, and fetch
+historical analyses.  A background task listens to Home Assistant
+WebSocket events and buffers them for summarisation.
+"""
+
 import asyncio
 import json
 import logging
-import yaml
 from pathlib import Path
+import yaml
 from fastapi import FastAPI, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 # ---------------- Global Event Buffer ----------------
@@ -16,11 +37,14 @@ try:
     from homegpt.api.models import AnalysisRequest, Settings
     from homegpt.api import db, analyzer
 except ImportError:
-    from pydantic import BaseModel
-    class AnalysisRequest(BaseModel):
-        mode: str
+    # Provide stubs for type checking when running outside of the
+    # packaged environment.  When installed properly these will be
+    # replaced by the real modules.
+    from pydantic import BaseModel  # type: ignore
+    class AnalysisRequest(BaseModel):  # type: ignore
+        mode: str | None = None
         focus: str | None = None
-    class Settings(BaseModel):
+    class Settings(BaseModel):  # type: ignore
         openai_api_key: str | None = None
         model: str | None = None
         mode: str | None = None
@@ -30,13 +54,13 @@ except ImportError:
         dry_run: bool | None = None
         log_level: str | None = None
         language: str | None = None
-    class db:
+    class db:  # type: ignore
         @staticmethod
-        def init_db(): pass
+        def init_db() -> None: pass
         @staticmethod
-        def get_analyses(limit): return []
+        def get_analyses(limit: int): return []
         @staticmethod
-        def get_analysis(aid): return {}
+        def get_analysis(aid: int): return {}
         @staticmethod
         def add_analysis(mode, focus, summary, actions): pass
     analyzer = None
@@ -88,6 +112,7 @@ def get_status():
         "last_analysis": last[0] if last else None,
     }
 
+
 @app.post("/api/mode")
 def set_mode(mode: str = Query(...)):
     logger.info(f"Setting mode to: {mode}")
@@ -96,64 +121,91 @@ def set_mode(mode: str = Query(...)):
     _save_config(cfg)
     return {"status": "ok", "mode": mode}
 
+
 @app.post("/api/run")
 async def run_analysis(request: AnalysisRequest = Body(...)):
+    """
+    Trigger a new analysis.
+
+    The mode and focus are taken from the request if provided, otherwise
+    the configured defaults are used.  All calls to OpenAI and Home
+    Assistant are wrapped in a try/except to prevent uncaught
+    exceptions from returning a generic 500 to the client.
+    """
     cfg = _load_config()
     mode = (request.mode or cfg.get("mode", "passive")).lower()
     focus = request.focus or ""
     logger.info("Run analysis (UI): mode=%s focus=%s", mode, focus)
-
-    summary = ""
-    actions = []
-
-    if HAVE_REAL:
-        ha = HAClient()
-        gpt = OpenAIClient()
-        try:
-            if mode == "passive":
-                if not EVENT_BUFFER:
-                    summary = "No notable events recorded."
+    try:
+        summary: str = ""
+        actions: list = []
+        if HAVE_REAL:
+            ha = HAClient()
+            gpt = OpenAIClient()
+            try:
+                if mode == "passive":
+                    if not EVENT_BUFFER:
+                        summary = "No notable events recorded."
+                    else:
+                        bullets = [
+                            f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
+                            for e in EVENT_BUFFER[-2000:]
+                        ]
+                        user = (
+                            f"Language: {cfg.get('language', 'en')}\.\n"
+                            f"Summarize recent home activity from these lines (newest last).\n"
+                            + "\n".join(bullets)
+                        )
+                        res = gpt.complete_json(SYSTEM_PASSIVE, user)
+                        summary = res.get("text") or json.dumps(res, indent=2)
+                        actions = []
+                        EVENT_BUFFER.clear()
                 else:
-                    bullets = [
-                        f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
-                        for e in EVENT_BUFFER[-2000:]
-                    ]
-                    user = (
-                        f"Language: {cfg.get('language', 'en')}.\n"
-                        f"Summarize recent home activity from these lines (newest last).\n"
-                        + "\n".join(bullets)
+                    states = await ha.states()
+                    lines = [f"{s['entity_id']}={s['state']}" for s in states[:400]]
+                    user = f"Mode: {mode}\nCurrent states (subset):\n" + "\n".join(lines)
+                    plan = gpt.complete_json(
+                        SYSTEM_ACTIVE, user, schema=ACTIONS_JSON_SCHEMA
                     )
-                    res = gpt.complete_json(SYSTEM_PASSIVE, user)
-                    summary = res.get("text") or json.dumps(res, indent=2)
-                    actions = []
-                    EVENT_BUFFER.clear()
-            else:
-                states = await ha.states()
-                lines = [f"{s['entity_id']}={s['state']}" for s in states[:400]]
-                user = f"Mode: {mode}\nCurrent states (subset):\n" + "\n".join(lines)
-                plan = gpt.complete_json(SYSTEM_ACTIVE, user, schema=ACTIONS_JSON_SCHEMA)
-                summary = plan.get("text") or plan.get("summary") or "No summary."
-                actions = plan.get("actions") or []
-        finally:
-            await ha.close()
-    else:
-        summary = f"Analysis in {mode} mode. Focus: {focus or 'General'}."
-        actions = ["light.turn_off living_room", "climate.set_temperature bedroom 20°C"]
+                    summary = plan.get("text") or plan.get("summary") or "No summary."
+                    actions = plan.get("actions") or []
+            finally:
+                await ha.close()
+        else:
+            # If the real clients aren't available (e.g., dev environment),
+            # return a dummy response so that the UI continues to work.
+            summary = f"Analysis in {mode} mode. Focus: {focus or 'General'}."
+            actions = [
+                "light.turn_off living_room",
+                "climate.set_temperature bedroom 20°C",
+            ]
+        row = db.add_analysis(mode, focus, summary, json.dumps(actions))
+        return {"status": "ok", "summary": summary, "actions": actions, "row": row}
+    except Exception as exc:
+        logger.exception("Error in run_analysis: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "message": str(exc),
+            },
+        )
 
-    row = db.add_analysis(mode, focus, summary, json.dumps(actions))
-    return {"status": "ok", "summary": summary, "actions": actions, "row": row}
 
 @app.get("/api/history")
 def history():
     return db.get_analyses(50)
 
+
 @app.get("/api/history/{analysis_id}")
 def get_history_item(analysis_id: int):
     return db.get_analysis(analysis_id)
 
+
 @app.get("/api/settings")
 def get_settings():
     return _load_config()
+
 
 @app.post("/api/settings")
 def update_settings(settings: Settings):
@@ -164,21 +216,23 @@ def update_settings(settings: Settings):
     _save_config(cfg)
     return {"status": "ok"}
 
+
 # ---------------- Config Helpers ----------------
-def _load_config():
+def _load_config() -> dict:
     if CONFIG_PATH.exists():
         return yaml.safe_load(CONFIG_PATH.read_text()) or {}
     return {"mode": "passive", "model": "gpt-4o-mini", "dry_run": True}
 
-def _save_config(data):
+
+def _save_config(data: dict) -> None:
     CONFIG_PATH.write_text(yaml.safe_dump(data))
+
 
 # ---------------- Background Event Listener ----------------
 async def ha_event_listener():
     if not HAVE_REAL:
         logger.warning("HA integration not available — event listener disabled.")
         return
-
     ha = HAClient()
     while True:
         try:
@@ -193,11 +247,12 @@ async def ha_event_listener():
                     EVENT_BUFFER.append(data)
                     if len(EVENT_BUFFER) > 5000:
                         EVENT_BUFFER.pop(0)
-                except Exception as e:
-                    logger.exception(f"Error processing event: {e}")
-        except Exception as e:
-            logger.error(f"HA websocket disconnected: {e}, reconnecting in 5s...")
+                except Exception as ex:
+                    logger.exception(f"Error processing event: {ex}")
+        except Exception as ex:
+            logger.error(f"HA websocket disconnected: {ex}, reconnecting in 5s...")
             await asyncio.sleep(5)
+
 
 @app.on_event("startup")
 async def startup_event():
