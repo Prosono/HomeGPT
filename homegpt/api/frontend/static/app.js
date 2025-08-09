@@ -48,6 +48,76 @@ const isSummaryTitle = (txt = "") =>
   /summary/i.test(txt) && !/energy|security|comfort|anomal/i.test(txt);
 
 
+// "time ago" helper
+const timeAgo = (iso) => {
+  if (!iso) return "";
+  const then = new Date(iso);
+  const sec = Math.max(1, (Date.now() - then.getTime()) / 1000);
+  const m = Math.floor(sec/60), h = Math.floor(m/60);
+  if (sec < 60) return `${Math.floor(sec)}s ago`;
+  if (m < 60)   return `${m}m ago`;
+  if (h < 24)   return `${h}h ago`;
+  const d = Math.floor(h/24); return `${d}d ago`;
+};
+
+// map heading -> pill class + icon
+const pillFor = (title="") => {
+  const t = title.toLowerCase();
+  if (/security/.test(t))             return { cls:"pill-sec",  icon:"<i class='mdi mdi-shield-lock-outline'></i>",  txt:"Security" };
+  if (/comfort/.test(t))              return { cls:"pill-comf", icon:"<i class='mdi mdi-thermometer'></i>",          txt:"Comfort" };
+  if (/energy/.test(t))               return { cls:"pill-ener", icon:"<i class='mdi mdi-flash-outline'></i>",        txt:"Energy" };
+  if (/anomal/.test(t))               return { cls:"pill-ano",  icon:"<i class='mdi mdi-alert-circle-outline'></i>", txt:"Anomalies" };
+  if (/presence|occupancy/.test(t))   return { cls:"pill-pres", icon:"<i class='mdi mdi-account-group-outline'></i>", txt:"Presence" };
+  if (/recommend|next steps/.test(t)) return { cls:"pill-reco", icon:"<i class='mdi mdi-lightbulb-on-outline'></i>", txt:"Next steps" };
+  return null;
+};
+
+// Parse summary markdown → headings + first bullets + numbers
+function parsePreview(summary="") {
+  let tokens = [];
+  try { tokens = marked.lexer(summary); } catch { /* noop */ }
+
+  // Collect headings in order
+  const headings = tokens.filter(t => t.type==="heading" && t.depth <= 3).map(t => t.text);
+
+  // Grab first 2 meaningful list items / paragraphs
+  const points = [];
+  for (const t of tokens) {
+    if (t.type === "list") {
+      for (const it of t.items) {
+        const txt = marked.parseInline(it.text || "").replace(/<[^>]+>/g,"").trim();
+        if (txt) points.push(txt);
+        if (points.length >= 2) break;
+      }
+    } else if (t.type === "paragraph") {
+      const txt = marked.parseInline(t.text || "").replace(/<[^>]+>/g,"").trim();
+      if (txt && txt.length > 24) { points.push(txt); }
+    }
+    if (points.length >= 2) break;
+  }
+
+  // Extract a short numeric series for a sparkline
+  const plain = summary.replace(/`[^`]+`/g,"");
+  const nums = (plain.match(/-?\d+(?:\.\d+)?/g) || []).map(parseFloat).filter(n=>!isNaN(n));
+  let series = null;
+  if (nums.length >= 4) {
+    // Keep up to 20 evenly-sampled points
+    const take = Math.min(20, nums.length);
+    const step = Math.floor(nums.length / take) || 1;
+    series = nums.filter((_,i)=> i%step===0).slice(0,take);
+  }
+
+  // Build pills from headings
+  const pills = [];
+  for (const h of headings) {
+    const p = pillFor(h);
+    if (p && !pills.find(x=>x.txt===p.txt)) pills.push(p);
+    if (pills.length >= 4) break;
+  }
+  return { pills, points, series };
+}
+
+
 async function jsonFetch(url, opts = {}) {
   const res = await fetch(url, opts);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} @ ${url}`);
@@ -69,7 +139,7 @@ function renderStatus(data) {
   }
 }
 
-function renderGrid(rows) {
+async function renderGrid(rows) {
   const grid = $("analysisGrid");
   grid.innerHTML = "";
 
@@ -78,26 +148,61 @@ function renderGrid(rows) {
       ? { id: row[0], ts: row[1], mode: row[2], focus: row[3], summary: row[4], actions: row[5] }
       : row;
 
-    const btn = document.createElement("button");
-    btn.className = "analysis-card";
-    btn.innerHTML = `
-      <div class="analysis-header">
-        ${modeIcon(r.mode)}
-        <div class="flex-1">
-          <div class="flex items-center justify-between">
-            <div class="font-semibold text-gray-100 capitalize">${r.mode ?? "passive"}</div>
-            <div class="text-xs text-gray-300">${r.ts ?? ""}</div>
-          </div>
-          <div class="mt-1 text-sm text-gray-200/90">${snippet(r.summary)}</div>
-          ${r.focus ? `
-            <div class="mt-2 inline-flex items-center text-[11px] px-2 py-0.5 rounded bg-indigo-600/20 text-indigo-300">
-              <i class="mdi mdi-crosshairs-gps mr-1"></i>${r.focus}
-            </div>` : ""}
+    const { pills, points, series } = parsePreview(r.summary || "");
+
+    const card = document.createElement("button");
+    card.className = "preview-card w-full text-left hover:bg-white/5 transition-colors";
+    card.addEventListener("click", () => openModal(r));
+
+    // header
+    const modePretty = (r.mode||"passive").charAt(0).toUpperCase() + (r.mode||"passive").slice(1);
+    card.innerHTML = `
+      <div class="preview-head">
+        <i class="mdi ${r.mode==='active' ? 'mdi-flash-outline text-emerald-300' : 'mdi-note-text-outline text-indigo-300'} text-xl"></i>
+        <div class="preview-title">${modePretty}</div>
+        <div class="preview-time" title="${r.ts || ''}">${timeAgo(r.ts)}</div>
+      </div>
+      <div class="preview-pills"></div>
+      <div class="preview-body">
+        <div class="preview-points">
+          ${points.length ? points.slice(0,2).map(p=>`<div class="point">• ${p}</div>`).join("") : `<div class="point">• ${snippet(r.summary, 120)}</div>`}
+          ${r.focus ? `<div class="focus-chip"><i class="mdi mdi-crosshairs-gps"></i> ${r.focus}</div>` : ""}
         </div>
+        <div class="preview-spark">${series ? `<canvas></canvas>` : ""}</div>
       </div>
     `;
-    btn.addEventListener("click", () => openModal(r));
-    grid.appendChild(btn);
+
+    // pills
+    const pillsWrap = card.querySelector(".preview-pills");
+    if (pills.length) {
+      pills.forEach(p => {
+        const span = document.createElement("span");
+        span.className = `pill ${p.cls}`;
+        span.innerHTML = `${p.icon}${p.txt}`;
+        pillsWrap.appendChild(span);
+      });
+    }
+
+    // sparkline
+    if (series && series.length) {
+      try {
+        const canvas = card.querySelector("canvas");
+        const ctx = canvas.getContext("2d");
+        new Chart(ctx, {
+          type: "line",
+          data: { labels: series.map((_,i)=>i+1), datasets: [{ data: series, tension: .35, pointRadius: 0, borderWidth: 2 }] },
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display:false } },
+            scales: { x: { display:false }, y: { display:false } }
+          }
+        });
+        canvas.style.width = "100%";
+        canvas.style.height = "44px";
+      } catch (e) { console.warn("sparkline failed:", e); }
+    }
+
+    grid.appendChild(card);
   });
 }
 
