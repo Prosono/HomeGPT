@@ -30,6 +30,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from homegpt.app.topology import pack_topology_for_prompt
+from homegpt.app.topology import fetch_topology_snapshot
 
 # ---------------- Global Event Buffer ----------------
 EVENT_BUFFER: list[dict] = []
