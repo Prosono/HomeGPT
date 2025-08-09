@@ -335,3 +335,45 @@ button:hover {
   position: relative;
   z-index: 1;
 }
+
+/* --- General box safety --- */
+.card, .preview-card { overflow: hidden; }
+#analysisGrid { overflow: visible; }        /* tiles can stack naturally */
+.preview-points, .point { overflow-wrap: anywhere; word-break: break-word; }
+
+/* Modal sizing + scroll */
+#detailsOverlay .card {
+  max-width: min(1200px, 96vw);
+  max-height: min(90vh, 1000px);
+  overflow: hidden;                /* keep rounded corners clean */
+  display: flex; flex-direction: column;
+}
+#modalSummary {
+  overflow-y: auto;
+  padding-right: 4px;              /* keep scrollbar off text */
+  max-height: calc(90vh - 150px);  /* fits under the modal header */
+}
+
+/* Make Markdown content safe */
+#modalSummary.prose {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+#modalSummary pre, #modalSummary code {
+  white-space: pre-wrap;           /* no horizontal scroll explosions */
+  word-break: break-word;
+}
+#modalSummary img, #modalSummary canvas {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* Pills & sparkline never overflow their lane */
+.preview-pills { overflow: hidden; }
+.preview-spark { overflow: hidden; border: 1px solid rgba(255,255,255,.08); }
+
+/* Small screens: add breathing room */
+@media (max-width: 640px) {
+  #modalSummary { max-height: calc(90vh - 120px); }
+}

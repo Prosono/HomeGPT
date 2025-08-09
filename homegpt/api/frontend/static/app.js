@@ -12,6 +12,50 @@ const modeIcon = (mode) => {
   return '<i class="mdi mdi-note-text-outline analysis-icon" aria-hidden="true"></i>';
 };
 
+
+// --- Progress controller ---
+let progTimer = null;
+let progActive = false;
+
+function setBar(pct, animate=true) {
+  const bar = $("progressBar");
+  if (!animate) bar.style.transition = "none";
+  bar.style.width = pct + "%";
+  if (!animate) {
+    // force reflow to re-enable transitions next time
+    void bar.offsetWidth; 
+    bar.style.transition = "";
+  }
+}
+
+function startProgress() {
+  // reset + jump to 25%
+  clearInterval(progTimer); progTimer = null;
+  progActive = true;
+  setBar(0, false);
+  requestAnimationFrame(() => setBar(25)); // quick kick
+
+  // drift towards 75% over ~25s (but never exceed it)
+  const start = Date.now();
+  progTimer = setInterval(() => {
+    if (!progActive) return;
+    const elapsed = (Date.now() - start) / 1000;     // seconds
+    // ease: asymptotically approach 75
+    const target = 25 + Math.min(50, (50 * (elapsed / 25)));
+    const current = parseFloat(($("progressBar").style.width || "0").replace("%","")) || 0;
+    if (current < target - 0.5) setBar(current + 1.5);
+    if (current >= 75 - 0.5) { /* parked near 75 */ }
+  }, 250);
+}
+
+function finishProgress() {
+  progActive = false;
+  clearInterval(progTimer); progTimer = null;
+  setBar(100); // let CSS animate this final jump
+  // optional: after a moment, reset to 0 for next run
+  setTimeout(() => setBar(0, false), 1200);
+}
+
 // ---------- Utils ----------
 const snippet = (text, max = 140) => {
   if (!text) return "";
@@ -229,24 +273,34 @@ async function toggleMode() {
 }
 
 async function runAnalysisNow() {
+  const btn = $("runAnalysis");
+  if (btn.dataset.busy === "1") return;  // guard double-clicks
+  btn.dataset.busy = "1";
+  btn.setAttribute("aria-busy", "true");
+  btn.classList.add("opacity-60", "pointer-events-none");
+
   const mode = $("toggleMode").textContent.trim().toLowerCase() || "passive";
-  const bar = $("progressBar");
-  bar.style.width = "0%";
-  requestAnimationFrame(() => (bar.style.width = "25%"));
+
+  startProgress();
+
   try {
     await jsonFetch(api("run"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode }),
     });
-    bar.style.width = "100%";
+    // snap to 100 immediately when we get the result
+    finishProgress();
     await loadHistory();
     await loadStatus();
   } catch (e) {
     console.error("runAnalysis failed:", e);
-    bar.style.width = "100%";
-    await loadHistory();
-    await loadStatus();
+    // Still complete the bar so the UI doesn't get stuck
+    finishProgress();
+  } finally {
+    btn.dataset.busy = "0";
+    btn.removeAttribute("aria-busy");
+    btn.classList.remove("opacity-60", "pointer-events-none");
   }
 }
 
