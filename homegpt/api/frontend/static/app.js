@@ -19,6 +19,21 @@ const snippet = (text, max = 140) => {
   return t.length > max ? t.slice(0, max - 1) + "…" : t;
 };
 
+const categoryIcon = (title = "") => {
+  const t = title.toLowerCase();
+  if (/\bsecurity\b/.test(t))            return '<i class="mdi mdi-shield-lock-outline"></i>';
+  if (/\bcomfort\b/.test(t))             return '<i class="mdi mdi-sofa-outline"></i>';
+  if (/\benergy\b/.test(t))              return '<i class="mdi mdi-flash-outline"></i>';
+  if (/\banomal(y|ies)\b/.test(t))       return '<i class="mdi mdi-alert-circle-outline"></i>';
+  if (/estimated\s+presence|occupancy/i.test(title)) return '<i class="mdi mdi-account-group-outline"></i>';
+  if (/recommendations|next steps/i.test(title))     return '<i class="mdi mdi-lightbulb-on-outline"></i>';
+  if (/camera|motion/i.test(title))      return '<i class="mdi mdi-cctv"></i>';
+  if (/wifi|network/i.test(title))       return '<i class="mdi mdi-wifi"></i>';
+  if (/temperature|humidity|climate/i.test(title))   return '<i class="mdi mdi-thermometer"></i>';
+  return '<i class="mdi mdi-subtitles-outline"></i>';
+};
+
+
 async function jsonFetch(url, opts = {}) {
   const res = await fetch(url, opts);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} @ ${url}`);
@@ -117,7 +132,6 @@ async function runAnalysisNow() {
 }
 
 // ---------- Modal (with Markdown) ----------
-// ---------- Modal (sectioned + Markdown + charts) ----------
 function openModal(row) {
   const overlay = $("detailsOverlay");
   const title   = $("modalTitle");
@@ -127,38 +141,28 @@ function openModal(row) {
   title.innerHTML = `${modeIcon(row.mode)} <span class="capitalize">${row.mode ?? "passive"}</span> summary`;
   meta.textContent = [row.ts, row.focus ? `Focus: ${row.focus}` : ""].filter(Boolean).join(" • ");
 
-  // Parse markdown into tokens using marked
   const raw = row.summary ?? "(No summary)";
   let tokens = [];
   try { tokens = marked.lexer(raw); } catch { container.textContent = raw; }
 
-  // Group tokens by headings into sections
+  // Group tokens by headings (h1–h4)
   const sections = [];
   let current = { title: null, bodyTokens: [] };
-
   const pushCurrent = () => {
     if (current.title || current.bodyTokens.length) sections.push(current);
     current = { title: null, bodyTokens: [] };
   };
 
   for (const tok of tokens) {
-    if (tok.type === "heading" && tok.depth <= 4) {
-      // Start a new section
-      pushCurrent();
-      current.title = tok.text;
-    } else {
-      current.bodyTokens.push(tok);
-    }
+    if (tok.type === "heading" && tok.depth <= 4) { pushCurrent(); current.title = tok.text; }
+    else { current.bodyTokens.push(tok); }
   }
   pushCurrent();
 
-  // If the first "section" is a single title like "Summary of Recent Home Activity",
-  // it will have title set and empty body; we keep it as a header card anyway.
-
-  // Build DOM
+  // Build grid
   container.innerHTML = "";
   const wrap = document.createElement("div");
-  wrap.className = "modal-sections";
+  wrap.className = "modal-sections";     // CSS grid handles columns responsively
   container.appendChild(wrap);
 
   sections.forEach((sec, idx) => {
@@ -166,33 +170,31 @@ function openModal(row) {
     card.className = "modal-section";
 
     const h = document.createElement("h3");
-    h.innerHTML = `<i class="mdi mdi-subtitles-outline"></i>${sec.title || (idx === 0 ? "Summary" : "Details")}`;
+    const titleText = sec.title || (idx === 0 ? "Summary" : "Details");
+    h.innerHTML = `${categoryIcon(titleText)} ${titleText}`;
     card.appendChild(h);
 
     const body = document.createElement("div");
     body.className = "section-body";
 
-    // Render the body tokens for this section back to HTML
     let html = "";
-    try {
-      html = marked.parser(sec.bodyTokens);
-    } catch {
-      html = `<p>${raw}</p>`;
-    }
+    try { html = marked.parser(sec.bodyTokens); }
+    catch { html = `<p>${raw}</p>`; }
     body.innerHTML = html;
     card.appendChild(body);
 
-    // Extract numbers from this section's plain text for charting
+    // Try charting numeric series found in this section
     const plain = body.textContent || "";
-    const nums = (plain.match(/-?\d+(?:\.\d+)?/g) || []).map(parseFloat).filter(n => !isNaN(n));
-    // Make the chart if we have at least 3 values (so it looks meaningful)
+    const nums = (plain.match(/-?\d+(?:\.\d+)?/g) || [])
+      .map(parseFloat)
+      .filter((n) => !isNaN(n));
+
     if (nums.length >= 3) {
       const unit =
         plain.includes("°C") ? "°C" :
         plain.includes("kWh") ? "kWh" :
         plain.includes("kW")  ? "kW"  :
-        plain.match(/Mb\/?s|Mbps/i) ? "Mbps" :
-        "";
+        /Mb\/?s|Mbps/i.test(plain) ? "Mbps" : "";
 
       const chartBox = document.createElement("div");
       chartBox.className = "section-chart";
@@ -200,9 +202,7 @@ function openModal(row) {
       chartBox.appendChild(canvas);
       card.appendChild(chartBox);
 
-      // Build simple line chart (Chart.js defaults for color/theme are fine)
       try {
-        // Labels: 1..N or try to infer range phrases: not necessary for now
         const labels = nums.map((_, i) => `${i + 1}`);
         new Chart(canvas.getContext("2d"), {
           type: "line",
@@ -222,11 +222,10 @@ function openModal(row) {
             plugins: { legend: { display: !!unit } },
             scales: {
               x: { display: false },
-              y: { ticks: { color: "#e5e7eb" }, grid: { color: "rgba(255,255,255,0.08)" } }
+              y: { ticks: { color: "#e5e7eb" }, grid: { color: "rgba(255,255,255,0.1)" } }
             }
           }
         });
-        // Give the canvas some height
         canvas.style.height = "140px";
       } catch (e) {
         console.warn("Chart render failed:", e);
@@ -241,6 +240,7 @@ function openModal(row) {
   $("overlayBackdrop").addEventListener("click", closeModal, { once: true });
   $("modalClose").addEventListener("click", closeModal, { once: true });
 }
+
 
 
 function escClose(e) { if (e.key === "Escape") closeModal(); }

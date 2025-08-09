@@ -91,18 +91,37 @@ button:hover {
   color: #f7c76b; /* warm accent */
 }
 
-/* Cards inside the modal */
+/* Panel sizing: square-ish, scrollable, responsive */
+.modal-panel {
+  /* cap to viewport; prefer a square box that fits both directions */
+  width: min(92vw, 1100px);
+  height: min(92vh, 1100px);
+  overflow: auto;
+}
+
+/* Container for section cards (we’ll toggle columns at breakpoints) */
 .modal-sections {
   display: grid;
+  grid-template-columns: 1fr;   /* mobile default: 1 column */
   gap: 14px;
 }
 
+/* 2 columns on medium screens, 3 on large if there’s room */
+@media (min-width: 720px) {
+  .modal-sections { grid-template-columns: 1fr 1fr; }
+}
+@media (min-width: 1200px) {
+  .modal-sections { grid-template-columns: 1fr 1fr; } /* keep 2 cols for readability */
+}
+
+/* Section card style */
 .modal-section {
   border: 1px solid rgba(255,255,255,0.10);
   border-radius: 14px;
   background: linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.05));
   box-shadow: 0 8px 24px rgba(0,0,0,0.35);
   padding: 14px;
+  min-width: 0; /* prevent grid overflow */
 }
 
 .modal-section h3 {
@@ -110,18 +129,23 @@ button:hover {
   align-items: center;
   gap: 8px;
   font-weight: 700;
-  color: #c7d2fe; /* indigo-200 */
+  color: #c7d2fe;
   margin-bottom: 6px;
 }
 
 .modal-section .section-body {
   color: #e5e7eb;
   font-size: 0.95rem;
+  line-height: 1.45;
 }
 
+/* Chart box inside a section */
 .section-chart {
   margin-top: 10px;
   background: rgba(0,0,0,0.25);
   border-radius: 10px;
   padding: 8px;
 }
+
+/* Make the entire overlay scroll on mobile if needed */
+#detailsOverlay { overflow: auto; }
