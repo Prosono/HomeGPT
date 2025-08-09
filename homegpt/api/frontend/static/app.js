@@ -1,35 +1,65 @@
-// Simple helper to construct API URLs and select DOM elements
-const api = (p) => `api/${p}`;
+// API + DOM helpers
+const base = window.location.pathname.replace(/\/$/, "");
+const api = (p) => `${base}/api/${p}`;
 const $ = (id) => document.getElementById(id);
 
-// Render a history table row.  Rows may be dictionaries or arrays.
-// We handle both to be robust to backend variations.
-function renderRow(row) {
-  const tr = document.createElement("tr");
-  tr.className = "border-t border-gray-200";
-  let ts, mode, summary;
-  if (row && typeof row === "object" && !Array.isArray(row)) {
-    ts = row.ts ?? "";
-    mode = row.mode ?? "";
-    summary = row.summary ?? "";
-  } else if (Array.isArray(row)) {
-    ts = row[1] ?? "";
-    mode = row[2] ?? "";
-    summary = row[4] ?? "";
+// Mode icon mapping
+const modeIcon = (mode) =>
+  (mode || "").toLowerCase() === "active" ? "⚡" : "📝";
+
+// Truncate helper
+const snippet = (text, max = 120) => {
+  if (!text) return "";
+  const t = String(text).trim().replace(/\s+/g, " ");
+  return t.length > max ? t.slice(0, max - 1) + "…" : t;
+};
+
+// -------- Renderers --------
+function renderStatus(data) {
+  const count = data.event_count ?? 0;
+  $("eventCount").textContent = `Events since last analysis: ${count}`;
+  if (data.seconds_since_last != null) {
+    const sec = Math.floor(data.seconds_since_last);
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    $("sinceLast").textContent = `Time since last analysis: ${h}h ${m}m`;
   } else {
-    ts = "";
-    mode = "";
-    summary = String(row ?? "");
+    $("sinceLast").textContent = "Time since last analysis: N/A";
   }
-  tr.innerHTML = `
-    <td class="p-2 whitespace-nowrap">${ts}</td>
-    <td class="p-2 whitespace-nowrap">${mode}</td>
-    <td class="p-2">${summary}</td>
-  `;
-  return tr;
 }
 
-// Fetch JSON via fetch API
+function renderGrid(rows) {
+  const grid = $("analysisGrid");
+  grid.innerHTML = "";
+
+  rows.forEach((row) => {
+    const r = Array.isArray(row)
+      ? { id: row[0], ts: row[1], mode: row[2], focus: row[3], summary: row[4], actions: row[5] }
+      : row;
+
+    const icon = modeIcon(r.mode);
+    const btn = document.createElement("button");
+    btn.className =
+      "w-full text-left p-4 rounded-xl border border-white/10 bg-gray-800/60 hover:bg-gray-800 transition-colors shadow group";
+    btn.innerHTML = `
+      <div class="flex items-start gap-3">
+        <div class="text-2xl">${icon}</div>
+        <div class="flex-1">
+          <div class="flex items-center justify-between">
+            <div class="font-semibold text-gray-100">${r.mode ?? "passive"}</div>
+            <div class="text-xs text-gray-400">${r.ts ?? ""}</div>
+          </div>
+          <div class="mt-1 text-sm text-gray-300">${snippet(r.summary)}</div>
+          ${r.focus ? `<div class="mt-2 inline-flex items-center text-[11px] px-2 py-0.5 rounded bg-indigo-600/20 text-indigo-300">🎯 ${r.focus}</div>` : ""}
+        </div>
+      </div>
+    `;
+    btn.addEventListener("click", () => openModal(r));
+    grid.appendChild(btn);
+  });
+}
+
+// -------- Data loaders --------
 async function jsonFetch(url, opts = {}) {
   const res = await fetch(url, opts);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} @ ${url}`);
@@ -37,38 +67,20 @@ async function jsonFetch(url, opts = {}) {
   return ct.includes("application/json") ? res.json() : null;
 }
 
-// Render status information (event count and time since last run)
-function renderStatus(data) {
-  const count = data.event_count ?? 0;
-  $("eventCount").textContent = `Events since last analysis: ${count}`;
-  if (data.seconds_since_last != null) {
-    const sec = Math.floor(data.seconds_since_last);
-    const hours = Math.floor(sec / 3600);
-    const minutes = Math.floor((sec % 3600) / 60);
-    $("sinceLast").textContent = `Time since last analysis: ${hours}h ${minutes}m`;
-  } else {
-    $("sinceLast").textContent = "Time since last analysis: N/A";
-  }
-}
-
-// Load status from backend and update mode button and status info
 async function loadStatus() {
   const data = await jsonFetch(api("status"));
   $("toggleMode").textContent = data.mode || "passive";
   renderStatus(data);
 }
 
-// Load recent analyses and populate history table
 async function loadHistory() {
   let rows = await jsonFetch(api("history"));
   if (!rows) rows = [];
   const dataRows = Array.isArray(rows) ? rows : Object.values(rows);
-  const tbody = $("historyTable");
-  tbody.innerHTML = "";
-  dataRows.forEach((r) => tbody.appendChild(renderRow(r)));
+  renderGrid(dataRows);
 }
 
-// Toggle between active/passive modes
+// -------- Interactions --------
 async function toggleMode() {
   const cur = $("toggleMode").textContent.trim().toLowerCase();
   const next = cur === "active" ? "passive" : "active";
@@ -76,14 +88,11 @@ async function toggleMode() {
   await loadStatus();
 }
 
-// Start a new analysis and handle progress bar updates
 async function runAnalysisNow() {
   const mode = $("toggleMode").textContent.trim().toLowerCase() || "passive";
   const bar = $("progressBar");
   bar.style.width = "0%";
-  requestAnimationFrame(() => {
-    bar.style.width = "25%";
-  });
+  requestAnimationFrame(() => (bar.style.width = "25%"));
   try {
     await jsonFetch(api("run"), {
       method: "POST",
@@ -91,8 +100,6 @@ async function runAnalysisNow() {
       body: JSON.stringify({ mode }),
     });
     bar.style.width = "100%";
-    // Always reload the full history from the server so that manual and automatic runs
-    // both appear in the table.
     await loadHistory();
     await loadStatus();
   } catch (e) {
@@ -103,13 +110,37 @@ async function runAnalysisNow() {
   }
 }
 
-// Initialize event handlers and load initial data
+// -------- Modal --------
+function openModal(row) {
+  const overlay = $("detailsOverlay");
+  const title = $("modalTitle");
+  const meta = $("modalMeta");
+  const summary = $("modalSummary");
+
+  title.textContent = `${modeIcon(row.mode)} ${row.mode ?? "passive"} summary`;
+  meta.textContent = [row.ts, row.focus ? `Focus: ${row.focus}` : ""].filter(Boolean).join(" • ");
+  summary.textContent = row.summary ?? "(No summary)";
+
+  overlay.classList.remove("hidden");
+  document.addEventListener("keydown", escClose);
+  $("overlayBackdrop").addEventListener("click", closeModal, { once: true });
+  $("modalClose").addEventListener("click", closeModal, { once: true });
+}
+
+function escClose(e) {
+  if (e.key === "Escape") closeModal();
+}
+function closeModal() {
+  $("detailsOverlay").classList.add("hidden");
+  document.removeEventListener("keydown", escClose);
+}
+
+// -------- Init --------
 function init() {
   $("toggleMode").addEventListener("click", toggleMode);
   $("runAnalysis").addEventListener("click", runAnalysisNow);
   loadStatus().catch(console.error);
   loadHistory().catch(console.error);
-  // Periodically refresh the status and history without page reload.
   setInterval(() => {
     loadStatus().catch(console.error);
     loadHistory().catch(console.error);

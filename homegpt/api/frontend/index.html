@@ -4,58 +4,61 @@
   <meta charset="UTF-8">
   <title>HomeGPT Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <link rel="stylesheet" href="static/style.css">
 </head>
-<body class="bg-gray-100 text-gray-900">
+<body class="bg-gray-900 text-gray-200 font-sans">
   <div class="max-w-6xl mx-auto p-6">
-    <h1 class="text-3xl font-bold mb-6">HomeGPT Dashboard</h1>
+    <div class="card rounded-xl shadow-xl p-8">
+      <h1 class="text-4xl font-extrabold mb-6 text-center text-indigo-400">HomeGPT Dashboard</h1>
 
-    <!-- Mode toggle -->
-    <div class="flex items-center mb-6">
-      <span class="mr-4 font-semibold">Mode:</span>
-      <button id="toggleMode" class="px-4 py-2 bg-blue-500 text-white rounded">
-        Loading...
-      </button>
-    </div>
+      <!-- Controls -->
+      <div class="flex flex-wrap items-center justify-between mb-6 gap-4">
+        <div class="flex items-center">
+          <span class="mr-4 font-semibold text-lg">Mode:</span>
+          <button id="toggleMode" class="px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white rounded-lg shadow-md transition-colors">
+            Loading...
+          </button>
+        </div>
 
-    <!-- Start analysis -->
-    <div class="mb-6">
-      <button id="runAnalysis" class="px-4 py-2 bg-green-500 text-white rounded">
-        Start New Analysis
-      </button>
-    </div>
+        <div class="flex-1 hidden sm:block"></div>
 
-    <!-- Analysis status: event count and last run -->
-    <div id="statusInfo" class="mb-4 text-sm text-gray-700">
-      <p id="eventCount"></p>
-      <p id="sinceLast"></p>
-    </div>
+        <div class="text-sm sm:text-base text-gray-300 flex items-center gap-6">
+          <p id="eventCount"></p>
+          <p id="sinceLast"></p>
+        </div>
 
-    <!-- Progress bar -->
-    <div class="mb-6">
-      <div class="w-full bg-gray-300 h-2 rounded">
-        <div id="progressBar" class="bg-blue-500 h-2 rounded" style="width:0%"></div>
+        <button id="runAnalysis" class="px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white rounded-lg shadow-md transition-colors">
+          Start New Analysis
+        </button>
       </div>
+
+      <!-- Progress bar -->
+      <div class="mb-6">
+        <div class="w-full bg-gray-700 h-3 rounded-full overflow-hidden">
+          <div id="progressBar" class="bg-gradient-to-r from-purple-500 to-pink-500 h-3 rounded-full transition-all duration-500" style="width:0%"></div>
+        </div>
+      </div>
+
+      <!-- Analysis buttons grid -->
+      <div id="analysisGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
     </div>
-
-    <!-- History table -->
-    <table class="w-full border border-gray-300 text-left">
-      <thead>
-        <tr class="bg-gray-200">
-          <th class="p-2">Time</th>
-          <th class="p-2">Mode</th>
-          <th class="p-2">Summary</th>
-        </tr>
-      </thead>
-      <tbody id="historyTable"></tbody>
-    </table>
-
-    <!-- Chart -->
-    <canvas id="actionsChart" class="mt-8"></canvas>
   </div>
 
-  <!-- Load JS last, with relative path for ingress -->
+  <!-- Modal overlay -->
+  <div id="detailsOverlay" class="fixed inset-0 z-50 hidden">
+    <div id="overlayBackdrop" class="absolute inset-0 bg-black/60"></div>
+    <div class="absolute inset-0 flex items-center justify-center p-4">
+      <div class="card max-w-3xl w-full rounded-xl shadow-2xl p-6 relative">
+        <button id="modalClose" class="absolute top-3 right-3 text-gray-300 hover:text-white text-xl leading-none">✕</button>
+        <div class="space-y-2 mb-4">
+          <h2 id="modalTitle" class="text-2xl font-bold text-indigo-300">Analysis</h2>
+          <div id="modalMeta" class="text-sm text-gray-400"></div>
+        </div>
+        <div id="modalSummary" class="prose prose-invert max-w-none whitespace-pre-wrap leading-relaxed"></div>
+      </div>
+    </div>
+  </div>
+
   <script src="static/app.js" defer></script>
 </body>
 </html>

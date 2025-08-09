@@ -38,3 +38,23 @@ button:hover {
 #historyTable tr:hover {
   background-color: rgba(255, 255, 255, 0.05);
 }
+
+/* Subtle glass look */
+.card {
+  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  backdrop-filter: blur(10px);
+  background-color: rgba(31,41,55,0.7);
+}
+
+/* Modal fade (optional) */
+#detailsOverlay {
+  animation: fadeIn 150ms ease-out both;
+}
+@keyframes fadeIn {
+  from { opacity: 0 }
+  to   { opacity: 1 }
+}
+
+/* Progress bar smoothness */
+#progressBar { transition: width 0.4s ease }
