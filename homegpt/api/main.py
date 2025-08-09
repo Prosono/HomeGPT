@@ -1,28 +1,29 @@
 """
 FastAPI application serving the HomeGPT dashboard and API endpoints.
 
-This version introduces two notable improvements:
+This version introduces three improvements:
 
-1.  The ``run_analysis`` endpoint now wraps its core logic in a
-    ``try/except`` block and returns a ``500`` JSON response with an
-    error message if something goes wrong.  This prevents uncaught
-    exceptions from bubbling up to the client and provides clearer
-    feedback when, for example, OpenAI or Home Assistant calls fail.
+1.  The ``run_analysis`` endpoint wraps its core logic in a try/except
+    block and returns a 500 JSON response with an error message if
+    something goes wrong.  This prevents uncaught exceptions from
+    bubbling up to the client.
 
-2.  The request model for ``run_analysis`` has been updated (see
-    ``homegpt/api/models.py``) so that the ``mode`` field is optional.
-    The handler uses the configured default mode if none is supplied.
+2.  The request model for ``run_analysis`` (see ``homegpt/api/models.py``)
+    now makes the ``mode`` field optional.  The handler uses the
+    configured default mode if none is supplied.
 
-The rest of the API is unchanged: it serves a small ingress UI, exposes
-endpoints to query and update settings, start analyses, and fetch
-historical analyses.  A background task listens to Home Assistant
-WebSocket events and buffers them for summarisation.
+3.  The ``history`` and ``get_history_item`` endpoints now return
+    dictionaries instead of raw tuples.  Each dictionary contains
+    ``id``, ``ts``, ``mode``, ``focus``, ``summary`` and ``actions``.
+    This ensures the front‑end receives consistent keys regardless of
+    the underlying SQLite driver.
 """
 
 import asyncio
 import json
 import logging
 from pathlib import Path
+from datetime import datetime, timezone
 import yaml
 from fastapi import FastAPI, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,9 +38,6 @@ try:
     from homegpt.api.models import AnalysisRequest, Settings
     from homegpt.api import db, analyzer
 except ImportError:
-    # Provide stubs for type checking when running outside of the
-    # packaged environment.  When installed properly these will be
-    # replaced by the real modules.
     from pydantic import BaseModel  # type: ignore
     class AnalysisRequest(BaseModel):  # type: ignore
         mode: str | None = None
@@ -103,20 +101,6 @@ app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="stati
 # ---------------- API Routes ----------------
 @app.get("/api/status")
 def get_status():
-    """
-    Return the current operating mode, model and a summary of the last
-    analysis.  In addition to the existing fields, this endpoint now
-    exposes two useful metrics for the UI:
-
-    - ``event_count`` – the number of Home Assistant events buffered since
-      the last analysis.  This is simply the length of ``EVENT_BUFFER``.
-    - ``seconds_since_last`` – the number of seconds elapsed since the
-      most recent analysis was saved.  If no previous analyses exist,
-      this field is ``None``.
-
-    These values allow the front‑end to display how many events have
-    occurred since the last run and how long it has been since a run.
-    """
     cfg = _load_config()
     last = db.get_analyses(1)
     # Count events waiting in memory
@@ -125,9 +109,6 @@ def get_status():
     seconds_since_last: float | None = None
     if last:
         row = last[0]
-        # Try to extract the timestamp.  Depending on how the DB returns
-        # rows, it may be a dict (row['ts']) or a tuple (index 1).  Fall
-        # back gracefully if neither works.
         ts_val = None
         try:
             ts_val = row.get("ts")  # type: ignore[attr-defined]
@@ -139,14 +120,9 @@ def get_status():
             except Exception:
                 ts_val = None
         if ts_val:
-            from datetime import datetime, timezone
             try:
-                # Parse ISO timestamp; datetime.fromisoformat can parse
-                # timezone‑aware strings (PEP 495).  If parsing fails,
-                # ignore the error and leave seconds_since_last as None.
                 last_dt = datetime.fromisoformat(str(ts_val))
                 now = datetime.now(timezone.utc)
-                # If the stored datetime lacks timezone, assume UTC
                 if last_dt.tzinfo is None:
                     last_dt = last_dt.replace(tzinfo=timezone.utc)
                 seconds_since_last = (now - last_dt).total_seconds()
@@ -161,7 +137,6 @@ def get_status():
         "seconds_since_last": seconds_since_last,
     }
 
-
 @app.post("/api/mode")
 def set_mode(mode: str = Query(...)):
     logger.info(f"Setting mode to: {mode}")
@@ -170,17 +145,8 @@ def set_mode(mode: str = Query(...)):
     _save_config(cfg)
     return {"status": "ok", "mode": mode}
 
-
 @app.post("/api/run")
 async def run_analysis(request: AnalysisRequest = Body(...)):
-    """
-    Trigger a new analysis.
-
-    The mode and focus are taken from the request if provided, otherwise
-    the configured defaults are used.  All calls to OpenAI and Home
-    Assistant are wrapped in a try/except to prevent uncaught
-    exceptions from returning a generic 500 to the client.
-    """
     cfg = _load_config()
     mode = (request.mode or cfg.get("mode", "passive")).lower()
     focus = request.focus or ""
@@ -201,7 +167,7 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                             for e in EVENT_BUFFER[-2000:]
                         ]
                         user = (
-                            f"Language: {cfg.get('language', 'en')}\.\n"
+                            f"Language: {cfg.get('language', 'en')}\n"
                             f"Summarize recent home activity from these lines (newest last).\n"
                             + "\n".join(bullets)
                         )
@@ -221,8 +187,6 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
             finally:
                 await ha.close()
         else:
-            # If the real clients aren't available (e.g., dev environment),
-            # return a dummy response so that the UI continues to work.
             summary = f"Analysis in {mode} mode. Focus: {focus or 'General'}."
             actions = [
                 "light.turn_off living_room",
@@ -230,13 +194,7 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
             ]
         # Persist the analysis
         row = db.add_analysis(mode, focus, summary, json.dumps(actions))
-
-        # Send a persistent notification for manual runs so the user sees the
-        # result in Home Assistant immediately.  The daily summariser and
-        # reactive controller already send their own notifications.  We no
-        # longer truncate the summary — the full text is delivered.  If
-        # desired, you can reinstate truncation by slicing ``summary``
-        # here (e.g., ``summary[:800]``) before passing it to notify().
+        # Send a persistent notification for manual runs (optional)
         if HAVE_REAL:
             try:
                 ha_notify = HAClient()
@@ -248,33 +206,85 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                     await ha_notify.close()
                 except Exception:
                     pass
-
-        return {"status": "ok", "summary": summary, "actions": actions, "row": row}
+        return {
+            "status": "ok",
+            "summary": summary,
+            "actions": actions,
+            # Convert row to dict to preserve column names.  Row may be a list,
+            # tuple or dict depending on DB driver.
+            "row": (
+                {"id": row[0], "ts": row[1], "mode": row[2], "focus": row[3], "summary": row[4], "actions": row[5]}
+                if isinstance(row, (list, tuple))
+                else row
+            ),
+        }
     except Exception as exc:
         logger.exception("Error in run_analysis: %s", exc)
         return JSONResponse(
             status_code=500,
-            content={
-                "status": "error",
-                "message": str(exc),
-            },
+            content={"status": "error", "message": str(exc)},
         )
-
 
 @app.get("/api/history")
 def history():
-    return db.get_analyses(50)
+    """
+    Return the most recent analyses.  Each analysis is returned as a
+    dictionary rather than a tuple/list for clarity and ease of
+    consumption by the UI.  The fields include:
 
+    - ``id``: unique row identifier
+    - ``ts``: ISO timestamp when the analysis was saved
+    - ``mode``: analysis mode (passive/active)
+    - ``focus``: user‑supplied focus string, if any
+    - ``summary``: summary text returned by the model
+    - ``actions``: JSON string of proposed or executed actions
+    """
+    rows = db.get_analyses(50)
+    result: list[dict] = []
+    for row in rows:
+        try:
+            rid, ts, mode, focus, summary, actions_json = row[:6]
+            result.append(
+                {
+                    "id": rid,
+                    "ts": ts,
+                    "mode": mode,
+                    "focus": focus,
+                    "summary": summary,
+                    "actions": actions_json,
+                }
+            )
+        except Exception:
+            if isinstance(row, dict):
+                result.append(row)
+            else:
+                logger.warning(f"Unexpected row format in history: {row}")
+    return result
 
 @app.get("/api/history/{analysis_id}")
 def get_history_item(analysis_id: int):
-    return db.get_analysis(analysis_id)
-
+    row = db.get_analysis(analysis_id)
+    if not row:
+        return None
+    try:
+        rid, ts, mode, focus, summary, actions_json = row[:6]
+        return {
+            "id": rid,
+            "ts": ts,
+            "mode": mode,
+            "focus": focus,
+            "summary": summary,
+            "actions": actions_json,
+        }
+    except Exception:
+        if isinstance(row, dict):
+            return row
+        logger.warning(f"Unexpected row format for analysis {analysis_id}: {row}")
+        return None
 
 @app.get("/api/settings")
 def get_settings():
     return _load_config()
-
 
 @app.post("/api/settings")
 def update_settings(settings: Settings):
@@ -285,17 +295,14 @@ def update_settings(settings: Settings):
     _save_config(cfg)
     return {"status": "ok"}
 
-
 # ---------------- Config Helpers ----------------
 def _load_config() -> dict:
     if CONFIG_PATH.exists():
         return yaml.safe_load(CONFIG_PATH.read_text()) or {}
     return {"mode": "passive", "model": "gpt-4o-mini", "dry_run": True}
 
-
 def _save_config(data: dict) -> None:
     CONFIG_PATH.write_text(yaml.safe_dump(data))
-
 
 # ---------------- Background Event Listener ----------------
 async def ha_event_listener():
@@ -321,7 +328,6 @@ async def ha_event_listener():
         except Exception as ex:
             logger.error(f"HA websocket disconnected: {ex}, reconnecting in 5s...")
             await asyncio.sleep(5)
-
 
 @app.on_event("startup")
 async def startup_event():

@@ -2,20 +2,20 @@
 const api = (p) => `api/${p}`;
 const $ = (id) => document.getElementById(id);
 
-// Render a history table row.  Rows may be arrays ([id, ts, mode, focus, summary, actions])
-// or objects ({ ts, mode, summary, ... }).  Fallback to a simple string if unknown.
+// Render a history table row.  Rows may be dictionaries or arrays.
+// We handle both to be robust to backend variations.
 function renderRow(row) {
   const tr = document.createElement("tr");
   tr.className = "border-t border-gray-200";
   let ts, mode, summary;
-  if (Array.isArray(row)) {
-    ts = row[1] ?? "";
-    mode = row[2] ?? "";
-    summary = row[4] ?? "";
-  } else if (row && typeof row === "object") {
+  if (row && typeof row === "object" && !Array.isArray(row)) {
     ts = row.ts ?? "";
     mode = row.mode ?? "";
     summary = row.summary ?? "";
+  } else if (Array.isArray(row)) {
+    ts = row[1] ?? "";
+    mode = row[2] ?? "";
+    summary = row[4] ?? "";
   } else {
     ts = "";
     mode = "";
@@ -29,7 +29,7 @@ function renderRow(row) {
   return tr;
 }
 
-// Fetch JSON via fetch API and ensure we only return JSON data
+// Fetch JSON via fetch API
 async function jsonFetch(url, opts = {}) {
   const res = await fetch(url, opts);
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} @ ${url}`);
@@ -62,7 +62,6 @@ async function loadStatus() {
 async function loadHistory() {
   let rows = await jsonFetch(api("history"));
   if (!rows) rows = [];
-  // If the response is not an array (e.g. a dict), convert to array of values
   const dataRows = Array.isArray(rows) ? rows : Object.values(rows);
   const tbody = $("historyTable");
   tbody.innerHTML = "";
@@ -80,7 +79,6 @@ async function toggleMode() {
 // Start a new analysis and handle progress bar updates
 async function runAnalysisNow() {
   const mode = $("toggleMode").textContent.trim().toLowerCase() || "passive";
-  // Reset and start progress bar
   const bar = $("progressBar");
   bar.style.width = "0%";
   requestAnimationFrame(() => {
@@ -92,10 +90,9 @@ async function runAnalysisNow() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode }),
     });
-    // Mark progress as complete
     bar.style.width = "100%";
-    // Reload the history from the server so that manual and automatic analyses
-    // are both reflected in the table.
+    // Always reload the full history from the server so that manual and automatic runs
+    // both appear in the table.
     await loadHistory();
     await loadStatus();
   } catch (e) {
@@ -116,7 +113,7 @@ function init() {
   setInterval(() => {
     loadStatus().catch(console.error);
     loadHistory().catch(console.error);
-  }, 10000); // refresh every 10 seconds
+  }, 10000);
 }
 
 if (document.readyState === "loading") {
