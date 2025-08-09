@@ -11,13 +11,23 @@ SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 BASE_HTTP = os.environ.get("SUPERVISOR_API", "http://supervisor/core/api")
 WS_URL = "ws://supervisor/core/websocket"
 
+
 class HAClient:
     def __init__(self):
+        if not SUPERVISOR_TOKEN:
+            # Fail fast so it’s obvious why HA calls/WS would fail.
+            raise RuntimeError(
+                "SUPERVISOR_TOKEN not set. Ensure your add-on config.yaml enables "
+                "homeassistant_api: true (and restart the add-on), or provide a "
+                "long-lived token flow."
+            )
+
         self.session = aiohttp.ClientSession(headers={
             "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
             "Content-Type": "application/json",
         })
         self._listeners = []  # callback functions for events
+        self._req_id = 100  # ids for one-shot WS calls
 
     async def close(self):
         """Close aiohttp session."""
@@ -113,41 +123,70 @@ class HAClient:
                 _LOGGER.error(f"WebSocket error: {e}, retrying in 5s...")
                 await asyncio.sleep(5)
 
-    # --- Registry helpers (reuse same WS auth flow) ---
-    async def _ws_call(self, ws, typ: str, req_id: int):
-        await ws.send_json({"id": req_id, "type": typ})
-        while True:
-            msg = await ws.receive_json()
-            if msg.get("id") == req_id:
-                if msg.get("success") is False:
-                    raise RuntimeError(f"HA WS error for {typ}: {msg}")
-                return msg.get("result")
+    # ---------------------------------------------------------------------
+    # Registry helpers: short-lived WS connections so we don't touch the
+    # streaming connection above. Each call authenticates, requests data,
+    # waits for the matching id, returns result, and closes.
+    # ---------------------------------------------------------------------
+
+    def _next_id(self) -> int:
+        self._req_id += 1
+        return self._req_id
+
+    async def _ws_once(self, req_type: str, payload: dict | None = None):
+        """
+        Open a short-lived WebSocket connection, auth, request `req_type`,
+        return the .result, then close.
+        """
+        _LOGGER.debug("WS once -> %s", req_type)
+        async with websockets.connect(WS_URL) as ws:
+            # auth_required
+            await ws.recv()
+            # auth
+            await ws.send(json.dumps({
+                "type": "auth",
+                "access_token": SUPERVISOR_TOKEN
+            }))
+            auth_reply = json.loads(await ws.recv())
+            if auth_reply.get("type") != "auth_ok":
+                raise RuntimeError(f"WS auth failed (one-shot): {auth_reply}")
+
+            req_id = self._next_id()
+            msg = {"id": req_id, "type": req_type}
+            if payload:
+                msg.update(payload)
+            await ws.send(json.dumps(msg))
+
+            while True:
+                raw = await ws.recv()
+                try:
+                    resp = json.loads(raw)
+                except json.JSONDecodeError:
+                    _LOGGER.warning("Non-JSON WS reply on one-shot: %r", raw)
+                    continue
+                if resp.get("id") == req_id:
+                    # Registry endpoints return {id, type: result, success: true, result: [...]}
+                    if resp.get("success") is False:
+                        raise RuntimeError(f"HA WS error for {req_type}: {resp}")
+                    return resp.get("result", [])
 
     async def list_areas(self):
-        ws = await self._ensure_ws()  # you already have this for events/auth
-        # Open a *short* request channel: reuse same socket but send a single request
-        # If your _ensure_ws returns a connected client stream, you can call directly:
-        req_id = self._next_id()
-        await ws.send_json({"id": req_id, "type": "config/area_registry/list"})
-        while True:
-            msg = await ws.receive_json()
-            if msg.get("id") == req_id:
-                return msg.get("result", [])
+        """Return area registry list."""
+        return await self._ws_once("config/area_registry/list")
 
     async def list_devices(self):
-        ws = await self._ensure_ws()
-        req_id = self._next_id()
-        await ws.send_json({"id": req_id, "type": "config/device_registry/list"})
-        while True:
-            msg = await ws.receive_json()
-            if msg.get("id") == req_id:
-                return msg.get("result", [])
+        """Return device registry list."""
+        return await self._ws_once("config/device_registry/list")
 
     async def list_entities(self):
-        ws = await self._ensure_ws()
-        req_id = self._next_id()
-        await ws.send_json({"id": req_id, "type": "config/entity_registry/list"})
-        while True:
-            msg = await ws.receive_json()
-            if msg.get("id") == req_id:
-                return msg.get("result", [])
+        """Return entity registry list."""
+        return await self._ws_once("config/entity_registry/list")
+
+    async def list_registries(self):
+        """Fetch areas, devices, entities in parallel."""
+        areas, devices, entities = await asyncio.gather(
+            self.list_areas(),
+            self.list_devices(),
+            self.list_entities(),
+        )
+        return {"areas": areas, "devices": devices, "entities": entities}

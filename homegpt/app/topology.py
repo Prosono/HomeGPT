@@ -1,5 +1,11 @@
 from collections import defaultdict
+from .ha import list_areas, list_devices, list_entities
 
+async def build_topology(host, port, token):
+    areas = await list_areas(host, port, token)
+    devices = await list_devices(host, port, token)
+    entities = await list_entities(host, port, token)
+    
 def pack_topology_for_prompt(areas, devices, entities, states, max_lines: int = 80) -> str:
     """Return a compact, plain-text snapshot for the prompt."""
     # Index areas
