@@ -1,0 +1,40 @@
+/* Custom styles to complement Tailwind classes and achieve a
+   sleek, professional look inspired by the SMARTi website.  These
+   styles are optional enhancements and can be tweaked to taste. */
+
+/* Apply a subtle radial gradient to the page background and set a
+   modern sans-serif font as the default. */
+body {
+  background: radial-gradient(circle at 30% 30%, #0f172a 0%, #0a192f 40%, #060c1f 100%);
+  font-family: 'Inter', 'Segoe UI', Tahoma, sans-serif;
+  min-height: 100vh;
+  background-attachment: fixed;
+}
+
+/* The card container uses a glassmorphism effect.  Tailwind's
+   backdrop-blur classes provide the blur; this adds a subtle
+   border and more pronounced shadow. */
+.card {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(10px);
+  background-color: rgba(31, 41, 55, 0.7);
+}
+
+/* Smooth transitions for the progress bar and buttons */
+#progressBar {
+  transition: width 0.4s ease;
+}
+
+button {
+  transition: background-position 0.3s ease;
+}
+
+button:hover {
+  background-position: right center;
+}
+
+/* Highlight table rows on hover for better readability */
+#historyTable tr:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}

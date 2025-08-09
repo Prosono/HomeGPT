@@ -106,10 +106,15 @@ function init() {
   $("runAnalysis").addEventListener("click", runAnalysisNow);
   loadStatus().catch(console.error);
   loadHistory().catch(console.error);
+  // Periodically refresh the status (event count and time since last analysis)
+  // without reloading the page.  Adjust the interval (ms) as needed.
+  setInterval(() => {
+    loadStatus().catch(console.error);
+  }, 10000);
 }
 
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentLoaded", init);
+  document.addEventListener("DOMContentDOMContentLoaded", init);
 } else {
   init();
 }
