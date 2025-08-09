@@ -12,6 +12,73 @@ const modeIcon = (mode) => {
   return '<i class="mdi mdi-note-text-outline analysis-icon" aria-hidden="true"></i>';
 };
 
+// ---------- Progress controller (robust + smooth) ----------
+const prog = {
+  raf: null,
+  running: false,
+  startTs: 0,
+  value: 0,             // 0..100
+  duration: 30000,      // ms to drift 25% -> 75% (tweak to taste)
+
+  bar() { return document.getElementById("progressBar"); },
+
+  set(v, immediate = false) {
+    this.value = Math.max(0, Math.min(100, v));
+    const el = this.bar();
+    if (!el) return;
+    if (immediate) {
+      const prev = el.style.transition;
+      el.style.transition = "none";
+      el.style.width = this.value + "%";
+      // force reflow to re-enable transitions
+      void el.offsetWidth;
+      el.style.transition = prev || "";
+    } else {
+      el.style.width = this.value + "%";
+    }
+  },
+
+  startIdle() {
+    // cancel any previous animation
+    this.stop(false);
+    this.running = true;
+    this.startTs = performance.now();
+
+    // kick to 25% immediately
+    this.set(0, true);
+    requestAnimationFrame(() => this.set(25));
+
+    const easeOutQuad = (t) => t * (2 - t);
+
+    const tick = (now) => {
+      if (!this.running) return;
+      const t = Math.min(1, (now - this.startTs) / this.duration);
+      const eased = easeOutQuad(t);      // 0..1
+      const target = 25 + 50 * eased;    // 25..75
+      // only move forward, never backward
+      if (this.value < target) this.set(Math.min(target, 75));
+      this.raf = requestAnimationFrame(tick);
+    };
+    this.raf = requestAnimationFrame(tick);
+  },
+
+  finish() {
+    // stop idle drift and animate to 100%
+    this.stop(false);
+    this.running = false;
+    this.set(100); // let CSS animate the final jump
+    // optional reset back to 0 after a moment
+    setTimeout(() => this.set(0, true), 1200);
+  },
+
+  stop(reset = true) {
+    if (this.raf) cancelAnimationFrame(this.raf);
+    this.raf = null;
+    this.running = false;
+    if (reset) this.set(0, true);
+  }
+};
+
 
 // --- Progress controller ---
 let progTimer = null;
@@ -272,31 +339,34 @@ async function toggleMode() {
   await loadStatus();
 }
 
+
+// ---------- Click handler using the controller ----------
 async function runAnalysisNow() {
-  const btn = $("runAnalysis");
-  if (btn.dataset.busy === "1") return;  // guard double-clicks
+  const btn = document.getElementById("runAnalysis");
+  if (btn.dataset.busy === "1") return; // guard double-clicks
   btn.dataset.busy = "1";
   btn.setAttribute("aria-busy", "true");
   btn.classList.add("opacity-60", "pointer-events-none");
 
-  const mode = $("toggleMode").textContent.trim().toLowerCase() || "passive";
+  const mode = document.getElementById("toggleMode").textContent.trim().toLowerCase() || "passive";
 
-  startProgress();
+  // start progress: 25% immediately, then drift toward 75%
+  prog.startIdle();
 
   try {
     await jsonFetch(api("run"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode }),
+      body: JSON.stringify({ mode })
     });
-    // snap to 100 immediately when we get the result
-    finishProgress();
+    // snap to 100% as soon as we have a response
+    prog.finish();
     await loadHistory();
     await loadStatus();
   } catch (e) {
     console.error("runAnalysis failed:", e);
-    // Still complete the bar so the UI doesn't get stuck
-    finishProgress();
+    // still complete the bar so UI doesn't get stuck
+    prog.finish();
   } finally {
     btn.dataset.busy = "0";
     btn.removeAttribute("aria-busy");

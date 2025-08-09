@@ -25,7 +25,7 @@ body {
 
 /* Smooth transitions for the progress bar and buttons */
 #progressBar {
-  transition: width 0.4s ease;
+  transition: width 0.8s ease;
 }
 
 button {
