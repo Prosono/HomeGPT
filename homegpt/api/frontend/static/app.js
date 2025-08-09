@@ -2,14 +2,25 @@
 const api = (p) => `api/${p}`;
 const $ = (id) => document.getElementById(id);
 
-// Render a history table row from a database row.  DB rows are returned
-// as arrays: [id, timestamp, mode, focus, summary, actions].
+// Render a history table row.  Rows may be arrays ([id, ts, mode, focus, summary, actions])
+// or objects ({ ts, mode, summary, ... }).  Fallback to a simple string if unknown.
 function renderRow(row) {
   const tr = document.createElement("tr");
   tr.className = "border-t border-gray-200";
-  const ts = row[1] ?? "";
-  const mode = row[2] ?? "";
-  const summary = row[4] ?? "";
+  let ts, mode, summary;
+  if (Array.isArray(row)) {
+    ts = row[1] ?? "";
+    mode = row[2] ?? "";
+    summary = row[4] ?? "";
+  } else if (row && typeof row === "object") {
+    ts = row.ts ?? "";
+    mode = row.mode ?? "";
+    summary = row.summary ?? "";
+  } else {
+    ts = "";
+    mode = "";
+    summary = String(row ?? "");
+  }
   tr.innerHTML = `
     <td class="p-2 whitespace-nowrap">${ts}</td>
     <td class="p-2 whitespace-nowrap">${mode}</td>
@@ -28,10 +39,8 @@ async function jsonFetch(url, opts = {}) {
 
 // Render status information (event count and time since last run)
 function renderStatus(data) {
-  // Event count
   const count = data.event_count ?? 0;
   $("eventCount").textContent = `Events since last analysis: ${count}`;
-  // Time since last analysis in human‑readable form
   if (data.seconds_since_last != null) {
     const sec = Math.floor(data.seconds_since_last);
     const hours = Math.floor(sec / 3600);
@@ -51,10 +60,13 @@ async function loadStatus() {
 
 // Load recent analyses and populate history table
 async function loadHistory() {
-  const rows = await jsonFetch(api("history")) || [];
+  let rows = await jsonFetch(api("history"));
+  if (!rows) rows = [];
+  // If the response is not an array (e.g. a dict), convert to array of values
+  const dataRows = Array.isArray(rows) ? rows : Object.values(rows);
   const tbody = $("historyTable");
   tbody.innerHTML = "";
-  rows.forEach((r) => tbody.appendChild(renderRow(r)));
+  dataRows.forEach((r) => tbody.appendChild(renderRow(r)));
 }
 
 // Toggle between active/passive modes
@@ -71,23 +83,20 @@ async function runAnalysisNow() {
   // Reset and start progress bar
   const bar = $("progressBar");
   bar.style.width = "0%";
-  // Give the browser a chance to paint before updating to 25%
   requestAnimationFrame(() => {
     bar.style.width = "25%";
   });
   try {
-    const res = await jsonFetch(api("run"), {
+    await jsonFetch(api("run"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ mode }),
     });
     // Mark progress as complete
     bar.style.width = "100%";
-    // Reload the history from the server so that manual and automatic
-    // analyses are both reflected in the table.  This avoids mismatches
-    // when rows aren't returned as expected.
+    // Reload the history from the server so that manual and automatic analyses
+    // are both reflected in the table.
     await loadHistory();
-    // Reload status after analysis completes
     await loadStatus();
   } catch (e) {
     console.error("runAnalysis failed:", e);
@@ -103,11 +112,7 @@ function init() {
   $("runAnalysis").addEventListener("click", runAnalysisNow);
   loadStatus().catch(console.error);
   loadHistory().catch(console.error);
-  // Periodically refresh the status (event count and time since last analysis)
-  // and history list without reloading the page.  Adjust the interval (ms)
-  // as needed.  This ensures that analyses created by scheduled tasks
-  // (daily summaries or active controls) appear in the table and that
-  // the event counter stays accurate.
+  // Periodically refresh the status and history without page reload.
   setInterval(() => {
     loadStatus().catch(console.error);
     loadHistory().catch(console.error);
