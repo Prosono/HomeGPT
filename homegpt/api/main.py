@@ -188,15 +188,13 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
         if HAVE_REAL:
             try:
                 ha_notify = HAClient()
-                # Only include the first 500 characters of the summary in the
-                # notification to avoid overwhelming the UI; the full text is
-                # available in the history.
-                notify_text = summary if len(summary) <= 500 else summary[:497] + "…"
-                await ha_notify.notify("HomeGPT – Analysis", notify_text)
+                # Send the full summary in the notification.  If your
+                # Home Assistant UI becomes cluttered, you can reintroduce
+                # truncation here with a higher limit.
+                await ha_notify.notify("HomeGPT – Analysis", summary)
             except Exception as notify_exc:
                 logger.warning(f"Failed to send notification: {notify_exc}")
             finally:
-                # ensure the client is closed
                 try:
                     await ha_notify.close()
                 except Exception:
