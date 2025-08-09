@@ -83,13 +83,10 @@ async function runAnalysisNow() {
     });
     // Mark progress as complete
     bar.style.width = "100%";
-    if (res && res.row) {
-      // Prepend newest row to history
-      const tbody = $("historyTable");
-      tbody.insertBefore(renderRow(res.row), tbody.firstChild);
-    } else {
-      await loadHistory();
-    }
+    // Reload the history from the server so that manual and automatic
+    // analyses are both reflected in the table.  This avoids mismatches
+    // when rows aren't returned as expected.
+    await loadHistory();
     // Reload status after analysis completes
     await loadStatus();
   } catch (e) {
@@ -107,14 +104,18 @@ function init() {
   loadStatus().catch(console.error);
   loadHistory().catch(console.error);
   // Periodically refresh the status (event count and time since last analysis)
-  // without reloading the page.  Adjust the interval (ms) as needed.
+  // and history list without reloading the page.  Adjust the interval (ms)
+  // as needed.  This ensures that analyses created by scheduled tasks
+  // (daily summaries or active controls) appear in the table and that
+  // the event counter stays accurate.
   setInterval(() => {
     loadStatus().catch(console.error);
-  }, 10000);
+    loadHistory().catch(console.error);
+  }, 10000); // refresh every 10 seconds
 }
 
 if (document.readyState === "loading") {
-  document.addEventListener("DOMContentDOMContentLoaded", init);
+  document.addEventListener("DOMContentLoaded", init);
 } else {
   init();
 }
