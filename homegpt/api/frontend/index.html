@@ -2,7 +2,8 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>HomeGPT Dashboard</title>
+  <title>SMARTi Spectra</title>
+  <h2>Smart Living, Simplified</h2>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -22,7 +23,17 @@
 
   <div class="max-w-6xl mx-auto p-6">
     <div class="card rounded-xl shadow-xl p-8">
-      <h1 class="text-4xl font-extrabold mb-6 text-center text-indigo-400">HomeGPT Dashboard</h1>
+      <!-- Header with logo + wordmark -->
+        <header class="mb-8">
+          <a href="/" class="flex items-center justify-center gap-3 select-none" aria-label="Spectra Home">
+            <picture>
+              <source srcset="static/spectra-logo-dark.png" media="(prefers-color-scheme: dark)">
+              <img src="static/spectra-logo-light.png" alt="Spectra logo" class="h-12 w-auto" height="48">
+            </picture>
+            <span class="text-3xl sm:text-4xl font-extrabold tracking-tight text-indigo-300">Spectra</span>
+          </a>
+          <p class="mt-2 text-center text-sm text-gray-400">Smart Living, Simplified</p>
+        </header>
 
       <!-- Controls -->
       <div class="flex flex-wrap items-center justify-between mb-6 gap-4">
