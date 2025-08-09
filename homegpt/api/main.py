@@ -103,13 +103,62 @@ app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="stati
 # ---------------- API Routes ----------------
 @app.get("/api/status")
 def get_status():
+    """
+    Return the current operating mode, model and a summary of the last
+    analysis.  In addition to the existing fields, this endpoint now
+    exposes two useful metrics for the UI:
+
+    - ``event_count`` – the number of Home Assistant events buffered since
+      the last analysis.  This is simply the length of ``EVENT_BUFFER``.
+    - ``seconds_since_last`` – the number of seconds elapsed since the
+      most recent analysis was saved.  If no previous analyses exist,
+      this field is ``None``.
+
+    These values allow the front‑end to display how many events have
+    occurred since the last run and how long it has been since a run.
+    """
     cfg = _load_config()
     last = db.get_analyses(1)
+    # Count events waiting in memory
+    event_count = len(EVENT_BUFFER)
+    # Compute seconds since last analysis if possible
+    seconds_since_last: float | None = None
+    if last:
+        row = last[0]
+        # Try to extract the timestamp.  Depending on how the DB returns
+        # rows, it may be a dict (row['ts']) or a tuple (index 1).  Fall
+        # back gracefully if neither works.
+        ts_val = None
+        try:
+            ts_val = row.get("ts")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        if not ts_val:
+            try:
+                ts_val = row[1]
+            except Exception:
+                ts_val = None
+        if ts_val:
+            from datetime import datetime, timezone
+            try:
+                # Parse ISO timestamp; datetime.fromisoformat can parse
+                # timezone‑aware strings (PEP 495).  If parsing fails,
+                # ignore the error and leave seconds_since_last as None.
+                last_dt = datetime.fromisoformat(str(ts_val))
+                now = datetime.now(timezone.utc)
+                # If the stored datetime lacks timezone, assume UTC
+                if last_dt.tzinfo is None:
+                    last_dt = last_dt.replace(tzinfo=timezone.utc)
+                seconds_since_last = (now - last_dt).total_seconds()
+            except Exception:
+                seconds_since_last = None
     return {
         "mode": cfg.get("mode", "passive"),
         "model": cfg.get("model", "gpt-4o-mini"),
         "dry_run": cfg.get("dry_run", True),
         "last_analysis": last[0] if last else None,
+        "event_count": event_count,
+        "seconds_since_last": seconds_since_last,
     }
 
 
@@ -184,16 +233,16 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
 
         # Send a persistent notification for manual runs so the user sees the
         # result in Home Assistant immediately.  The daily summariser and
-        # reactive controller already send their own notifications.
+        # reactive controller already send their own notifications.  We no
+        # longer truncate the summary — the full text is delivered.  If
+        # desired, you can reinstate truncation by slicing ``summary``
+        # here (e.g., ``summary[:800]``) before passing it to notify().
         if HAVE_REAL:
             try:
                 ha_notify = HAClient()
-                # Send the full summary in the notification.  If your
-                # Home Assistant UI becomes cluttered, you can reintroduce
-                # truncation here with a higher limit.
                 await ha_notify.notify("HomeGPT – Analysis", summary)
             except Exception as notify_exc:
-                logger.warning(f"Failed to send notification: {notify_exc}")
+                logger.warning("Failed to send notification: %s", notify_exc)
             finally:
                 try:
                     await ha_notify.close()
