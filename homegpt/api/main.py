@@ -152,46 +152,43 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
     mode = (request.mode or cfg.get("mode", "passive")).lower()
     focus = request.focus or ""
     logger.info("Run analysis (UI): mode=%s focus=%s", mode, focus)
+
     try:
         summary: str = ""
         actions: list = []
+
         if HAVE_REAL:
             ha = HAClient()
             gpt = OpenAIClient()
             try:
                 if mode == "passive":
-                    if not EVENT_BUFFER:
-                        summary = "No notable events recorded."
-                    else:
-                        # 1) Fetch registries + states
-                        areas = await ha.list_areas()
-                        devices = await ha.list_devices()
-                        entities = await ha.list_entities()
-                        states = await ha.states()
+                    # 1) Build compact, automatic topology snapshot (areas/devices/entities + people from states)
+                    topo = await fetch_topology_snapshot(ha, max_lines=80)
 
-                        # 2) Pack compact topology
-                        topo = pack_topology_for_prompt(areas, devices, entities, states, max_lines=80)
+                    # 2) Build recent event bullets (keep newest last)
+                    bullets = [
+                        f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
+                        for e in EVENT_BUFFER[-2000:]
+                    ]
+                    events_block = "\n".join(bullets) if bullets else "(none)"
 
-                        # 3) Existing event bullets
-                        bullets = [
-                            f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
-                            for e in EVENT_BUFFER[-2000:]
-                        ]
+                    # 3) Compose user message with topology + events
+                    user = (
+                        f"Language: {cfg.get('language', 'en')}.\n"
+                        "First, here is a compact topology snapshot (areas, device counts, people), "
+                        "then the recent events (newest last). Use both to infer presence, room usage, energy, "
+                        "and anomalies.\n\n"
+                        f"{topo}\n\n"
+                        "EVENTS:\n" + events_block
+                    )
 
-                        # 4) Compose user message with topology + events
-                        user = (
-                            f"Language: {cfg.get('language', 'en')}.\n"
-                            "First, here is a compact topology snapshot (areas, device counts, people), "
-                            "then the recent events (newest last). Use both to infer presence, room usage, and energy context.\n\n"
-                            f"{topo}\n\n"
-                            "EVENTS:\n" + "\n".join(bullets)
-                        )
+                    # 4) Call the text-only passive model (Option A path)
+                    summary = gpt.complete_text(SYSTEM_PASSIVE, user)
+                    actions = []
+                    EVENT_BUFFER.clear()
 
-                        # 5) Call passive text mode (your Option A)
-                        summary = gpt.complete_text(SYSTEM_PASSIVE, user)
-                        actions = []
-                        EVENT_BUFFER.clear()
                 else:
+                    # ACTIVE mode unchanged; still propose JSON actions
                     states = await ha.states()
                     lines = [f"{s['entity_id']}={s['state']}" for s in states[:400]]
                     user = f"Mode: {mode}\nCurrent states (subset):\n" + "\n".join(lines)
@@ -200,17 +197,22 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                     )
                     summary = plan.get("text") or plan.get("summary") or "No summary."
                     actions = plan.get("actions") or []
+
             finally:
                 await ha.close()
+
         else:
+            # Fallback for dev envs without HA/OpenAI wiring
             summary = f"Analysis in {mode} mode. Focus: {focus or 'General'}."
             actions = [
                 "light.turn_off living_room",
                 "climate.set_temperature bedroom 20°C",
             ]
-        # Persist the analysis
+
+        # 5) Persist the analysis
         row = db.add_analysis(mode, focus, summary, json.dumps(actions))
-        # Send a persistent notification for manual runs (optional)
+
+        # 6) Notify in HA so the result is visible immediately
         if HAVE_REAL:
             try:
                 ha_notify = HAClient()
@@ -222,25 +224,25 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                     await ha_notify.close()
                 except Exception:
                     pass
+
+        # 7) Normalize the returned row shape for the UI
         return {
             "status": "ok",
             "summary": summary,
             "actions": actions,
-            # Convert row to dict to preserve column names.  Row may be a list,
-            # tuple or dict depending on DB driver.
             "row": (
                 {"id": row[0], "ts": row[1], "mode": row[2], "focus": row[3], "summary": row[4], "actions": row[5]}
                 if isinstance(row, (list, tuple))
                 else row
             ),
         }
+
     except Exception as exc:
         logger.exception("Error in run_analysis: %s", exc)
         return JSONResponse(
             status_code=500,
             content={"status": "error", "message": str(exc)},
         )
-
 @app.get("/api/history")
 def history():
     """

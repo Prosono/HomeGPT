@@ -1,34 +1,52 @@
+# homegpt/app/topology.py
+from __future__ import annotations
 from collections import defaultdict
-from .ha import list_areas, list_devices, list_entities
+from typing import List, Dict, Any
+import asyncio
 
-async def build_topology(host, port, token):
-    areas = await list_areas(host, port, token)
-    devices = await list_devices(host, port, token)
-    entities = await list_entities(host, port, token)
-    
-def pack_topology_for_prompt(areas, devices, entities, states, max_lines: int = 80) -> str:
-    """Return a compact, plain-text snapshot for the prompt."""
-    # Index areas
-    area_by_id = {a["area_id"]: a for a in areas}
-    area_name = lambda aid: (area_by_id.get(aid) or {}).get("name") or "Unassigned"
+
+def pack_topology_for_prompt(
+    areas: List[Dict[str, Any]],
+    devices: List[Dict[str, Any]],
+    entities: List[Dict[str, Any]],
+    states: List[Dict[str, Any]],
+    max_lines: int = 80,
+) -> str:
+    """
+    Build a compact, token-friendly snapshot of the home for prompting.
+    Emits counts per area and a short people snapshot.
+    """
+    # Index areas and a quick lookup for device->area
+    area_by_id = {a.get("area_id"): a for a in areas}
+    dev_area_by_id = {d.get("id"): d.get("area_id") for d in devices}
+
+    def area_name(area_id: str | None) -> str:
+        if not area_id:
+            return "Unassigned"
+        return (area_by_id.get(area_id) or {}).get("name") or "Unassigned"
 
     # Count domains per area
     counts = defaultdict(lambda: defaultdict(int))
     for e in entities:
         eid = e.get("entity_id") or ""
+        # Prefer registry-provided domain if present; else split from entity_id
         dom = e.get("domain") or (eid.split(".", 1)[0] if "." in eid else "sensor")
-        a = area_name(e.get("area_id") or (e.get("device_id") and next((d.get("area_id") for d in devices if d["id"] == e["device_id"]), None)))
+
+        # Prefer entity area; fall back to device->area; else unassigned
+        a_id = e.get("area_id") or dev_area_by_id.get(e.get("device_id"))
+        a = area_name(a_id)
         counts[a][dom] += 1
 
-    # People snapshot from states
+    # Minimal people snapshot from current states
     people = []
     for s in states:
-        eid = s.get("entity_id","")
+        eid = s.get("entity_id", "")
         if eid.startswith("person.") or eid.startswith("device_tracker."):
+            attr = s.get("attributes", {})
             people.append({
-                "name": s.get("attributes",{}).get("friendly_name", eid),
+                "name": attr.get("friendly_name", eid),
                 "state": s.get("state"),
-                "zone": s.get("attributes",{}).get("source"),
+                "zone": attr.get("source") or attr.get("zone") or "",
                 "last": s.get("last_changed"),
             })
 
@@ -37,12 +55,31 @@ def pack_topology_for_prompt(areas, devices, entities, states, max_lines: int = 
     lines.append("HOME TOPOLOGY (auto)")
     for a in sorted(counts.keys()):
         c = counts[a]
-        line = f"AREA {a} | lights={c.get('light',0)} motion={c.get('binary_sensor',0)} climate={c.get('climate',0)} cams={c.get('camera',0)} sensors={c.get('sensor',0)} switches={c.get('switch',0)}"
+        line = (
+            f"AREA {a} | lights={c.get('light',0)} motion={c.get('binary_sensor',0)} "
+            f"climate={c.get('climate',0)} cams={c.get('camera',0)} "
+            f"sensors={c.get('sensor',0)} switches={c.get('switch',0)}"
+        )
         lines.append(line)
 
     if people:
         lines.append("PEOPLE:")
         for p in people[:8]:
-            lines.append(f" - {p['name']}: {p['state']} zone={p['zone']} last={p['last']}")
+            zone = f" zone={p['zone']}" if p["zone"] else ""
+            lines.append(f" - {p['name']}: {p['state']}{zone} last={p['last']}")
 
     return "\n".join(lines[:max_lines])
+
+
+async def fetch_topology_snapshot(ha_client, max_lines: int = 80) -> str:
+    """
+    Convenience: fetch areas/devices/entities + states via the given HAClient,
+    then return the packed snapshot string.
+    """
+    areas, devices, entities, states = await asyncio.gather(
+        ha_client.list_areas(),
+        ha_client.list_devices(),
+        ha_client.list_entities(),
+        ha_client.states(),
+    )
+    return pack_topology_for_prompt(areas, devices, entities, states, max_lines=max_lines)
