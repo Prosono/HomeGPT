@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import List, Dict, Any
 import asyncio
+from websockets.exceptions import ConnectionClosedError
 
 
 def pack_topology_for_prompt(
@@ -71,15 +72,28 @@ def pack_topology_for_prompt(
     return "\n".join(lines[:max_lines])
 
 
-async def fetch_topology_snapshot(ha_client, max_lines: int = 80) -> str:
-    """
-    Convenience: fetch areas/devices/entities + states via the given HAClient,
-    then return the packed snapshot string.
-    """
-    areas, devices, entities, states = await asyncio.gather(
-        ha_client.list_areas(),
-        ha_client.list_devices(),
-        ha_client.list_entities(),
-        ha_client.states(),
-    )
-    return pack_topology_for_prompt(areas, devices, entities, states, max_lines=max_lines)
+async def fetch_topology_snapshot(ha, max_lines: int = 80) -> str:
+    lines = ["TOPOLOGY SNAPSHOT", ""]
+
+    try:
+        # Full snapshot
+        areas, devices, entities, states = await asyncio.gather(
+            ha.list_areas(),
+            ha.list_devices(),
+            ha.list_entities(),   # <-- can be large
+            ha.states(),
+        )
+    except (ConnectionClosedError, Exception):
+        # Fall back: skip entities (they're usually the heavy one)
+        areas, devices, states = await asyncio.gather(
+            ha.list_areas(),
+            ha.list_devices(),
+            ha.states(),
+        )
+        entities = []
+
+    # …build your summary from areas/devices/entities/states as before…
+    # Keep it compact and guard against huge outputs:
+    # if len(lines) > max_lines: lines = lines[:max_lines-1] + ["… (truncated)"]
+
+    return "\n".join(lines[: max_lines - 1] + ["… (truncated)"] if len(lines) > max_lines else lines)

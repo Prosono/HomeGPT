@@ -11,11 +11,18 @@ SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 BASE_HTTP = os.environ.get("SUPERVISOR_API", "http://supervisor/core/api")
 WS_URL = "ws://supervisor/core/websocket"
 
+WS_OPTS = {
+    # Accept arbitrarily large frames (entity registry can be big)
+    "max_size": None,            # or set to e.g. 16 * 1024 * 1024
+    # If you still hit size issues after inflation, you can add:
+    # "compression": None,
+    "ping_interval": 30,
+    "ping_timeout": 30,
+}
 
 class HAClient:
     def __init__(self):
         if not SUPERVISOR_TOKEN:
-            # Fail fast so it’s obvious why HA calls/WS would fail.
             raise RuntimeError(
                 "SUPERVISOR_TOKEN not set. Ensure your add-on config.yaml enables "
                 "homeassistant_api: true (and restart the add-on), or provide a "
@@ -27,7 +34,7 @@ class HAClient:
             "Content-Type": "application/json",
         })
         self._listeners = []  # callback functions for events
-        self._req_id = 100  # ids for one-shot WS calls
+        self._req_id = 100    # ids for one-shot WS calls
 
     async def close(self):
         """Close aiohttp session."""
@@ -76,7 +83,8 @@ class HAClient:
         while True:
             try:
                 _LOGGER.info("Connecting to Home Assistant WebSocket...")
-                async with websockets.connect(WS_URL) as ws:
+                # >>> pass WS_OPTS here <<<
+                async with websockets.connect(WS_URL, **WS_OPTS) as ws:
                     # Authenticate
                     auth_msg = await ws.recv()  # Expect auth_required
                     _LOGGER.debug(f"Auth message: {auth_msg}")
@@ -139,7 +147,8 @@ class HAClient:
         return the .result, then close.
         """
         _LOGGER.debug("WS once -> %s", req_type)
-        async with websockets.connect(WS_URL) as ws:
+        # >>> and here too <<<
+        async with websockets.connect(WS_URL, **WS_OPTS) as ws:
             # auth_required
             await ws.recv()
             # auth
@@ -165,7 +174,6 @@ class HAClient:
                     _LOGGER.warning("Non-JSON WS reply on one-shot: %r", raw)
                     continue
                 if resp.get("id") == req_id:
-                    # Registry endpoints return {id, type: result, success: true, result: [...]}
                     if resp.get("success") is False:
                         raise RuntimeError(f"HA WS error for {req_type}: {resp}")
                     return resp.get("result", [])
