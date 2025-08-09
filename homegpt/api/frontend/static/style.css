@@ -253,3 +253,85 @@ button:hover {
 
 /* Make the entire overlay scroll on mobile if needed */
 #detailsOverlay { overflow: auto; }
+
+/* ===== Animated background (aurora) ===== */
+.aurora {
+  position: fixed;
+  inset: 0;
+  z-index: 0;            /* behind your card container */
+  pointer-events: none;
+  overflow: hidden;
+  /* subtle base gradient so edges feel cohesive */
+  background: radial-gradient(1200px 800px at 15% 0%, rgba(99,102,241,.10), transparent 60%),
+              radial-gradient(1000px 700px at 90% 100%, rgba(20,184,166,.08), transparent 60%);
+}
+
+/* generic blob */
+.aurora .blob {
+  position: absolute;
+  width: 44vmax;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  filter: blur(60px);
+  opacity: .28;
+  mix-blend-mode: screen;         /* pretty on dark UIs */
+  transform: translate3d(0,0,0);  /* GPU hint */
+  will-change: transform, opacity;
+  animation-timing-function: ease-in-out;
+}
+
+/* individual blobs: color + path + speed */
+.aurora .b1 {
+  background: radial-gradient(circle at 30% 30%, rgba(99,102,241,.60), transparent 55%);
+  left: -10vmax; top: -6vmax;
+  animation: driftX1 26s infinite alternate, driftY1 34s infinite alternate;
+}
+.aurora .b2 {
+  background: radial-gradient(circle at 65% 40%, rgba(16,185,129,.55), transparent 60%);
+  right: -14vmax; top: -8vmax;
+  animation: driftX2 30s infinite alternate, driftY2 40s infinite alternate;
+}
+.aurora .b3 {
+  background: radial-gradient(circle at 40% 60%, rgba(236,72,153,.50), transparent 60%);
+  left: 10vmax; bottom: -12vmax;
+  animation: driftX3 36s infinite alternate, driftY3 32s infinite alternate;
+}
+.aurora .b4 {
+  background: radial-gradient(circle at 55% 45%, rgba(59,130,246,.55), transparent 58%);
+  right: 5vmax; bottom: -10vmax;
+  animation: driftX4 28s infinite alternate, driftY4 37s infinite alternate;
+  opacity: .22;
+}
+.aurora .b5 {
+  background: radial-gradient(circle at 50% 50%, rgba(245,158,11,.45), transparent 60%);
+  left: 35vmax; top: 35vh;
+  animation: driftX5 42s infinite alternate, driftY5 46s infinite alternate;
+  opacity: .18;
+}
+
+/* X/Y keyframes are separated to create organic motion */
+@keyframes driftX1 { from { transform: translateX(0) } to { transform: translateX(12vmax) } }
+@keyframes driftY1 { from { transform: translateY(0) } to { transform: translateY(8vmax) } }
+
+@keyframes driftX2 { from { transform: translateX(0) } to { transform: translateX(-10vmax) } }
+@keyframes driftY2 { from { transform: translateY(0) } to { transform: translateY(12vmax) } }
+
+@keyframes driftX3 { from { transform: translateX(0) } to { transform: translateX(16vmax) } }
+@keyframes driftY3 { from { transform: translateY(0) } to { transform: translateY(-10vmax) } }
+
+@keyframes driftX4 { from { transform: translateX(0) } to { transform: translateX(-14vmax) } }
+@keyframes driftY4 { from { transform: translateY(0) } to { transform: translateY(-8vmax) } }
+
+@keyframes driftX5 { from { transform: translateX(0) } to { transform: translateX(10vmax) } }
+@keyframes driftY5 { from { transform: translateY(0) } to { transform: translateY(10vmax) } }
+
+/* Respect reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  .aurora .blob { animation: none; opacity: .12 }
+}
+
+/* Ensure your main card sits above the background */
+.card, #analysisGrid, header, main, footer {
+  position: relative;
+  z-index: 1;
+}
