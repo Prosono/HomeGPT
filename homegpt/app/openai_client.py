@@ -23,7 +23,7 @@ def _pick_model(cfg_model: Optional[str]) -> str:
         logger.warning("Unknown/untested model '%s'. Proceeding anyway; "
                        "known models: %s", model, ", ".join(sorted(KNOWN_MODELS)))
     return model
-:
+
 def _client() -> OpenAI:
     # expects OPENAI_API_KEY in env (add-on supports this)
     key = os.getenv("OPENAI_API_KEY")
