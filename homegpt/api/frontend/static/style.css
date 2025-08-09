@@ -21,6 +21,8 @@ body {
   background-color: rgba(31, 41, 55, 0.7);
 }
 
+
+
 /* Smooth transitions for the progress bar and buttons */
 #progressBar {
   transition: width 0.4s ease;
@@ -58,3 +60,34 @@ button:hover {
 
 /* Progress bar smoothness */
 #progressBar { transition: width 0.4s ease }
+
+/* Prominent, modern cards */
+.analysis-card {
+  width: 100%;
+  text-align: left;
+  background: linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.06));
+  padding: 1.1rem 1.1rem;
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,0.10);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  transition: transform .18s ease, box-shadow .18s ease, background .18s ease;
+}
+
+.analysis-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 14px 30px rgba(0,0,0,0.45);
+  background: linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.07));
+}
+
+.analysis-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.analysis-icon {
+  font-size: 1.6rem;
+  line-height: 1;
+  color: #f7c76b; /* warm accent */
+}
+
