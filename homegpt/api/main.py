@@ -261,26 +261,22 @@ def history():
                 logger.warning(f"Unexpected row format in history: {row}")
     return result
 
-@app.get("/api/history/{analysis_id}")
-def get_history_item(analysis_id: int):
-    row = db.get_analysis(analysis_id)
-    if not row:
-        return None
-    try:
+@app.get("/api/history")
+def history():
+    rows = db.get_analyses(50)
+    result = []
+    for row in rows:
         rid, ts, mode, focus, summary, actions_json = row[:6]
-        return {
+        result.append({
             "id": rid,
             "ts": ts,
             "mode": mode,
             "focus": focus,
             "summary": summary,
             "actions": actions_json,
-        }
-    except Exception:
-        if isinstance(row, dict):
-            return row
-        logger.warning(f"Unexpected row format for analysis {analysis_id}: {row}")
-        return None
+        })
+    return result
+
 
 @app.get("/api/settings")
 def get_settings():
