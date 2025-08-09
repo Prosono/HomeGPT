@@ -112,3 +112,42 @@ class HAClient:
             except Exception as e:
                 _LOGGER.error(f"WebSocket error: {e}, retrying in 5s...")
                 await asyncio.sleep(5)
+
+    # --- Registry helpers (reuse same WS auth flow) ---
+    async def _ws_call(self, ws, typ: str, req_id: int):
+        await ws.send_json({"id": req_id, "type": typ})
+        while True:
+            msg = await ws.receive_json()
+            if msg.get("id") == req_id:
+                if msg.get("success") is False:
+                    raise RuntimeError(f"HA WS error for {typ}: {msg}")
+                return msg.get("result")
+
+    async def list_areas(self):
+        ws = await self._ensure_ws()  # you already have this for events/auth
+        # Open a *short* request channel: reuse same socket but send a single request
+        # If your _ensure_ws returns a connected client stream, you can call directly:
+        req_id = self._next_id()
+        await ws.send_json({"id": req_id, "type": "config/area_registry/list"})
+        while True:
+            msg = await ws.receive_json()
+            if msg.get("id") == req_id:
+                return msg.get("result", [])
+
+    async def list_devices(self):
+        ws = await self._ensure_ws()
+        req_id = self._next_id()
+        await ws.send_json({"id": req_id, "type": "config/device_registry/list"})
+        while True:
+            msg = await ws.receive_json()
+            if msg.get("id") == req_id:
+                return msg.get("result", [])
+
+    async def list_entities(self):
+        ws = await self._ensure_ws()
+        req_id = self._next_id()
+        await ws.send_json({"id": req_id, "type": "config/entity_registry/list"})
+        while True:
+            msg = await ws.receive_json()
+            if msg.get("id") == req_id:
+                return msg.get("result", [])

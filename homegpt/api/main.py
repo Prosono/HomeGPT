@@ -29,6 +29,7 @@ from fastapi import FastAPI, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from homegpt.app.topology import pack_topology_for_prompt
 
 # ---------------- Global Event Buffer ----------------
 EVENT_BUFFER: list[dict] = []
@@ -162,15 +163,31 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                     if not EVENT_BUFFER:
                         summary = "No notable events recorded."
                     else:
+                        # 1) Fetch registries + states
+                        areas = await ha.list_areas()
+                        devices = await ha.list_devices()
+                        entities = await ha.list_entities()
+                        states = await ha.states()
+
+                        # 2) Pack compact topology
+                        topo = pack_topology_for_prompt(areas, devices, entities, states, max_lines=80)
+
+                        # 3) Existing event bullets
                         bullets = [
                             f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
                             for e in EVENT_BUFFER[-2000:]
                         ]
+
+                        # 4) Compose user message with topology + events
                         user = (
-                            f"Language: {cfg.get('language', 'en')}\n"
-                            f"Summarize recent home activity from these lines (newest last).\n"
-                            + "\n".join(bullets)
+                            f"Language: {cfg.get('language', 'en')}.\n"
+                            "First, here is a compact topology snapshot (areas, device counts, people), "
+                            "then the recent events (newest last). Use both to infer presence, room usage, and energy context.\n\n"
+                            f"{topo}\n\n"
+                            "EVENTS:\n" + "\n".join(bullets)
                         )
+
+                        # 5) Call passive text mode (your Option A)
                         summary = gpt.complete_text(SYSTEM_PASSIVE, user)
                         actions = []
                         EVENT_BUFFER.clear()
