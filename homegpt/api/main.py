@@ -171,8 +171,7 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                             f"Summarize recent home activity from these lines (newest last).\n"
                             + "\n".join(bullets)
                         )
-                        res = gpt.complete_json(SYSTEM_PASSIVE, user)
-                        summary = res.get("text") or json.dumps(res, indent=2)
+                        summary = gpt.complete_text(SYSTEM_PASSIVE, user)
                         actions = []
                         EVENT_BUFFER.clear()
                 else:
