@@ -12,16 +12,25 @@ logger = logging.getLogger("HomeGPT.OpenAI")
 # this list, we just warn and fallback if totally unknown.
 KNOWN_MODELS = {
     "gpt-5", "gpt-5-mini", "gpt-5-nano",
+    "gpt-4o", "gpt-4o-mini",
 }
-
-DEFAULT_MODEL = "gpt-5"  # keeps things working if config is empty/bad
+DEFAULT_MODEL = "gpt-5"
 
 def _pick_model(cfg_model: Optional[str]) -> str:
     model = (cfg_model or os.getenv("OPENAI_MODEL") or DEFAULT_MODEL).strip()
     if model not in KNOWN_MODELS:
-        logger.warning("Unknown/untested model '%s'. Proceeding anyway; "
-                       "known models: %s", model, ", ".join(sorted(KNOWN_MODELS)))
+        logger.warning("Unknown/untested model '%s'. Proceeding anyway; known models: %s",
+                       model, ", ".join(sorted(KNOWN_MODELS)))
     return model
+
+class OpenAIClient:
+    def __init__(self, model: Optional[str] = None, timeout: float = 30.0, max_retries: int = 2):
+        # 👇 pick from explicit arg, or env, or default
+        self.model = _pick_model(model)
+        self.timeout = timeout
+        self.max_retries = max_retries
+        self._client = _client()
+        logger.info("OpenAI client ready. Model=%s", self.model)
 
 def _client() -> OpenAI:
     # expects OPENAI_API_KEY in env (add-on supports this)
