@@ -145,11 +145,28 @@ async def main() -> None:
     """
     Entry point for the HomeGPT core process.
 
-    Runs the daily summariser and reactive controller concurrently.  The
-    tasks will keep running until the process is interrupted.  When
+    Runs the daily summariser and reactive controller concurrently. The
+    tasks will keep running until the process is interrupted. When
     shutting down, the Home Assistant client is closed gracefully.
     """
-    ha, gpt = HAClient(), OpenAIClient()
+    # Load the same config the API uses so we honor `model: gpt-5`
+    import yaml
+    import logging
+    from pathlib import Path
+
+    CONFIG_PATH = Path("/config/homegpt_config.yaml")
+    cfg = {}
+    if CONFIG_PATH.exists():
+        try:
+            cfg = yaml.safe_load(CONFIG_PATH.read_text()) or {}
+        except Exception as e:
+            logging.getLogger("HomeGPT").warning(
+                "Failed to load config: %s", e
+            )
+
+    model = cfg.get("model", "gpt-5")
+    ha, gpt = HAClient(), OpenAIClient(model=model)
+
     try:
         await asyncio.gather(
             summarize_daily(ha, gpt),
@@ -157,6 +174,7 @@ async def main() -> None:
         )
     finally:
         await ha.close()
+
 
 
 if __name__ == "__main__":
