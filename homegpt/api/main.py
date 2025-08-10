@@ -145,7 +145,7 @@ def get_status():
 
     return {
         "mode": cfg.get("mode", "passive"),
-        "model": cfg.get("model", "gpt-4o-mini"),
+        "model": cfg.get("model", "gpt-5"),
         "dry_run": cfg.get("dry_run", True),
         "last_analysis": last[0] if last else None,
         "event_count": event_count,
@@ -406,7 +406,7 @@ def update_settings(settings: Settings):
 def _load_config() -> dict:
     if CONFIG_PATH.exists():
         return yaml.safe_load(CONFIG_PATH.read_text()) or {}
-    return {"mode": "passive", "model": "gpt-4o-mini", "dry_run": True}
+    return {"mode": "passive", "model": "gpt-5", "dry_run": True}
 
 
 def _save_config(data: dict) -> None:
