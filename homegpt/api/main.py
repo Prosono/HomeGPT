@@ -28,14 +28,26 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from homegpt.app.topology import pack_topology_for_prompt
-from homegpt.app.topology import fetch_topology_snapshot, pack_states_for_prompt
+
+from homegpt.app.topology import (
+    fetch_topology_snapshot,
+    pack_topology_for_prompt,
+    pack_states_for_prompt,
+    pack_history_for_prompt,
+)
+
 
 # ---------------- Global Event Buffer ----------------
 EVENT_BUFFER: list[dict] = []
 EVENT_BUFFER_MAX = 20000
 AUTO_ANALYSIS_EVENT_THRESHOLD = 10000       # auto-run when we reach 2k events
 AUTO_ANALYSIS_MIN_INTERVAL_SEC = 15 * 60   # debounce auto-runs (15 min)
+
+# History packing defaults (prompt-balance knobs)
+DEFAULT_HISTORY_HOURS = 6         # how many hours back to fetch from /history/period
+HISTORY_MAX_LINES = 200           # how many lines we keep after packing
+STATE_MAX_LINES = 120             # lines for current state block
+TOPO_MAX_LINES = 80               # lines for topology block
 
 EVENT_LOCK = asyncio.Lock()
 _analysis_in_progress = asyncio.Event()
@@ -151,6 +163,7 @@ def get_status():
         "last_analysis": last[0] if last else None,
         "event_count": event_count,
         "seconds_since_last": seconds_since_last,
+        "history_hours": int(cfg.get("history_hours", DEFAULT_HISTORY_HOURS)),
     }
 
 
@@ -182,24 +195,51 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                 if not events:
                     summary = "No notable events recorded."
                 else:
-                    topo = await fetch_topology_snapshot(ha, max_lines=80)
+                    # ----- Topology -----
+                    topo = await fetch_topology_snapshot(ha, max_lines=TOPO_MAX_LINES)
 
-                    # --- Current state snapshot (single /states call) ---
+                    # ----- Current state (ground truth) -----
                     all_states = await ha.states()
-                    state_block = pack_states_for_prompt(all_states, max_lines=120)
+                    state_block = pack_states_for_prompt(all_states, max_lines=STATE_MAX_LINES)
 
+                    # ----- History for ALL entities (last N hours) -----
+                    cfg_hours = int(_load_config().get("history_hours", DEFAULT_HISTORY_HOURS))
+                    from datetime import datetime, timezone, timedelta
+                    now = datetime.now(timezone.utc)
+                    start = now - timedelta(hours=cfg_hours)
+                    # Home Assistant expects ISO strings; None → all entities
+                    try:
+                        hist = await ha.history_period(
+                            start.isoformat(),
+                            now.isoformat(),
+                            entity_ids=None,               # ALL entities tracked by recorder
+                            minimal_response=True,
+                        )
+                        history_block = pack_history_for_prompt(
+                            hist, max_lines=HISTORY_MAX_LINES, hours=cfg_hours
+                        )
+                    except Exception as hist_exc:
+                        logger.warning("History fetch/pack failed: %s", hist_exc)
+                        history_block = "(history unavailable)"
+
+                    # ----- Recent event bullets (use the snapshot we just took) -----
                     bullets = [
                         f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
                         for e in events[-AUTO_ANALYSIS_EVENT_THRESHOLD:]
                     ]
+                    events_block = "\n".join(bullets) if bullets else "(none)"
 
+                    # ----- Compose user message -----
                     user = (
                         f"Language: {cfg.get('language', 'en')}.\n"
-                        "First, a compact topology snapshot; then the current state; then recent events (newest last). "
-                        "Use CURRENT STATE as ground truth for presence, open/closed, modes, and setpoints.\n\n"
+                        "First, a compact topology snapshot; then the CURRENT STATE for all entities; "
+                        f"then a compressed history for the last {cfg_hours} hours; "
+                        "then the raw recent events (newest last). "
+                        "Treat CURRENT STATE as ground truth (avoid guessing).\n\n"
                         f"{topo}\n\n"
                         f"{state_block}\n\n"
-                        "EVENTS:\n" + "\n".join(bullets)
+                        f"{history_block}\n\n"
+                        "EVENTS:\n" + events_block
                     )
 
                     summary = gpt.complete_text(SYSTEM_PASSIVE, user)
@@ -257,39 +297,58 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
             gpt = OpenAIClient()
             try:
                 if mode == "passive":
-                    # 1) Snapshot & clear atomically (limit to 2000 for prompt size)
+                    # 1) Snapshot & clear atomically (limit to last 2000 events for UI-sized runs)
                     async with EVENT_LOCK:
                         events = EVENT_BUFFER[-2000:]
                         EVENT_BUFFER.clear()
 
                     # 2) Topology
-                    # 1) Build compact topology snapshot
-                    topo = await fetch_topology_snapshot(ha, max_lines=80)
+                    topo = await fetch_topology_snapshot(ha, max_lines=TOPO_MAX_LINES)
 
-                    # 1b) Current state snapshot (for ground truth)
+                    # 3) CURRENT STATE
                     all_states = await ha.states()
-                    state_block = pack_states_for_prompt(all_states, max_lines=120)
+                    state_block = pack_states_for_prompt(all_states, max_lines=STATE_MAX_LINES)
 
-                    # 2) Build recent event bullets
+                    # 4) HISTORY (ALL entities for last N hours)
+                    cfg_hours = int(_load_config().get("history_hours", DEFAULT_HISTORY_HOURS))
+                    from datetime import datetime, timezone, timedelta
+                    now = datetime.now(timezone.utc)
+                    start = now - timedelta(hours=cfg_hours)
+                    try:
+                        hist = await ha.history_period(
+                            start.isoformat(),
+                            now.isoformat(),
+                            entity_ids=None,
+                            minimal_response=True,
+                        )
+                        history_block = pack_history_for_prompt(
+                            hist, max_lines=HISTORY_MAX_LINES, hours=cfg_hours
+                        )
+                    except Exception as hist_exc:
+                        logger.warning("History fetch/pack failed: %s", hist_exc)
+                        history_block = "(history unavailable)"
+
+                    # 5) Recent event bullets from the snapshot we took
                     bullets = [
                         f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
                         for e in events
                     ]
                     events_block = "\n".join(bullets) if bullets else "(none)"
 
-                    # 3) Compose user message
+                    # 6) Compose prompt
                     user = (
                         f"Language: {cfg.get('language', 'en')}.\n"
-                        "First, topology; then CURRENT STATE; then recent events (newest last). "
+                        "First, topology; then CURRENT STATE; then compressed history; then recent events. "
                         "Use CURRENT STATE as ground truth (avoid guessing).\n\n"
                         f"{topo}\n\n"
                         f"{state_block}\n\n"
+                        f"{history_block}\n\n"
                         "EVENTS:\n" + events_block
-)
+                    )
 
-                    # 5) Model call (Option A: plain text)
+                    # 7) Call the text model
                     summary = gpt.complete_text(SYSTEM_PASSIVE, user)
-                    actions: list = []
+                    actions = []
 
                 else:
                     # ACTIVE mode (JSON plan)

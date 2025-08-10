@@ -4,7 +4,7 @@ from collections import defaultdict
 from typing import List, Dict, Any
 import asyncio
 from websockets.exceptions import ConnectionClosedError
-
+from datetime import datetime, timedelta, timezone
 
 def pack_topology_for_prompt(
     areas: List[Dict[str, Any]],
@@ -192,3 +192,132 @@ def pack_states_for_prompt(
         lines = lines[:max_lines] + [f"... (+{more} more)"]
 
     return "CURRENT STATE:\n" + "\n".join(lines)
+
+def _iso(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
+
+def _fmt_dur(seconds: float) -> str:
+    m = int(round(seconds/60))
+    return f"{m} min" if m < 90 else f"{round(m/60)} h"
+
+def pack_history_for_prompt(history: list, stats: list[dict] | None = None, max_lines: int = 80) -> str:
+    """
+    history: payload from /history/period (list[list[state_changes]])
+    stats  : payload from /statistics/during (list[dict]) or None
+    Creates a small, human- and model-friendly digest.
+    """
+    lines: list[str] = []
+    door_time_open = 0.0
+    door_max_open  = 0.0
+    motion_hits_by_area: dict[str, int] = {}
+    lights_on_time: dict[str, float] = {}
+    climate_changes: list[str] = []
+    media_sessions: list[str] = []
+
+    now = datetime.now(timezone.utc)
+
+    for series in history or []:
+        if not series:
+            continue
+        first = series[0]
+        eid = first.get("entity_id","")
+        attrs = first.get("attributes",{}) or {}
+
+        # determine class
+        domain = eid.split(".")[0] if "." in eid else ""
+        devclass = attrs.get("device_class")
+
+        # Helper: walk changes
+        prev_state = None
+        prev_ts = None
+        for row in series:
+            st = row.get("state")
+            ts = row.get("last_changed") or row.get("last_updated") or row.get("timestamp")
+            try:
+                t = datetime.fromisoformat(ts) if ts else None
+                if t and t.tzinfo is None: t = t.replace(tzinfo=timezone.utc)
+            except Exception:
+                t = None
+
+            # Doors/Windows open duration
+            if domain == "binary_sensor" and devclass in {"door","window","opening"}:
+                if prev_state is not None and prev_ts and t:
+                    if prev_state == "on":  # open
+                        door_time_open += max(0.0, (t - prev_ts).total_seconds())
+                        door_max_open = max(door_max_open, (t - prev_ts).total_seconds())
+
+            # Motion counts by area (use area from friendly_name heuristic)
+            if domain == "binary_sensor" and devclass in {"motion","occupancy","presence"}:
+                if st == "on":
+                    area = (attrs.get("area_id") or attrs.get("room") or attrs.get("friendly_name","")).split()[0]
+                    motion_hits_by_area[area] = motion_hits_by_area.get(area, 0) + 1
+
+            # Light on-time accumulation
+            if domain == "light":
+                if prev_state is not None and prev_ts and t:
+                    if prev_state == "on":
+                        lights_on_time[eid] = lights_on_time.get(eid, 0.0) + max(0.0, (t - prev_ts).total_seconds())
+
+            # Climate mode/setpoint changes
+            if domain == "climate":
+                # note changes in hvac_mode or temperature targets if present
+                if prev_state is not None and st != prev_state:
+                    climate_changes.append(f"{eid} → mode/state: {prev_state} → {st} @ {ts}")
+                targ = attrs.get("temperature") or attrs.get("target_temp_high") or attrs.get("target_temp_low")
+                if targ is not None:
+                    climate_changes.append(f"{eid} target={targ} @ {ts}")
+
+            # Media playback sessions (rough)
+            if domain == "media_player":
+                if prev_state == "playing" and st != "playing" and prev_ts and t:
+                    dur = (t - prev_ts).total_seconds()
+                    if dur >= 60:
+                        media_sessions.append(f"{eid}: played {_fmt_dur(dur)} ending {ts}")
+
+            prev_state, prev_ts = st, t
+
+        # Tail segment to 'now' for on-time (simplified)
+        if domain == "light" and prev_state == "on" and prev_ts:
+            lights_on_time[eid] = lights_on_time.get(eid, 0.0) + max(0.0, (now - prev_ts).total_seconds())
+        if domain == "binary_sensor" and devclass in {"door","window","opening"} and prev_state == "on" and prev_ts:
+            dur = max(0.0, (now - prev_ts).total_seconds())
+            door_time_open += dur
+            door_max_open = max(door_max_open, dur)
+
+    # Build lines
+    if door_time_open or door_max_open:
+        lines.append(f"Doors/Windows: total open {_fmt_dur(door_time_open)}, longest open {_fmt_dur(door_max_open)}")
+
+    if motion_hits_by_area:
+        top = sorted(motion_hits_by_area.items(), key=lambda x: x[1], reverse=True)[:5]
+        lines.append("Motion (top areas): " + ", ".join(f"{a}:{n}" for a,n in top))
+
+    if lights_on_time:
+        topL = sorted(lights_on_time.items(), key=lambda x: x[1], reverse=True)[:5]
+        lines.append("Lights on-time: " + ", ".join(f"{eid.split('.')[1]}:{_fmt_dur(sec)}" for eid,sec in topL))
+
+    if climate_changes:
+        lines.append("Climate changes: " + "; ".join(climate_changes[:6]))
+
+    if media_sessions:
+        lines.append("Media: " + "; ".join(media_sessions[:4]))
+
+    # Energy stats (hourly) if provided
+    if stats:
+        # stats is a list of { "statistic_id": "sensor.x", "data": [ {start, mean, max, ...}, ...] }
+        for s in stats[:3]:  # limit to 3 series max
+            sid = s.get("statistic_id","")
+            data = s.get("data",[])
+            if not data: continue
+            try:
+                today_sum = sum([d.get("mean") or d.get("sum") or 0.0 for d in data[-24:]])
+            except Exception:
+                today_sum = 0.0
+            lines.append(f"Energy {sid.split('.')[-1]}: last 24h est ~{round(today_sum)} units (hourly stats)")
+
+    if not lines:
+        lines.append("(No notable history in window)")
+
+    return "HISTORY DIGEST (recent window):\n" + "\n".join(f"- {ln}" for ln in lines[:max_lines])

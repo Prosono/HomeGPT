@@ -198,3 +198,42 @@ class HAClient:
             self.list_entities(),
         )
         return {"areas": areas, "devices": devices, "entities": entities}
+
+
+    async def history_period(self, start_iso: str, end_iso: str | None = None,
+                            entity_ids: list[str] | None = None,
+                            minimal_response: bool = True) -> list:
+        """
+        GET /api/history/period/<start>?end_time=<end>&filter_entity_id=...&minimal_response=1
+        Returns a list of lists, each inner list is time-ordered states for one entity.
+        """
+        params = {}
+        if end_iso:
+            params["end_time"] = end_iso
+        if minimal_response:
+            params["minimal_response"] = "1"
+        if entity_ids:
+            params["filter_entity_id"] = ",".join(entity_ids)
+
+        url = f"{BASE_HTTP}/history/period/{start_iso}"
+        async with self.session.get(url, params=params) as r:
+            r.raise_for_status()
+            return await r.json()
+
+    async def statistics_during(self, start_iso: str, end_iso: str,
+                                statistic_ids: list[str],
+                                period: str = "hour") -> list[dict]:
+        """
+        GET /api/statistics/during?start_time=...&end_time=...&statistic_ids=a,b&period=hour
+        Good for energy/power series without huge payloads.
+        """
+        params = {
+            "start_time": start_iso,
+            "end_time": end_iso,
+            "period": period,
+            "statistic_ids": ",".join(statistic_ids),
+        }
+        url = f"{BASE_HTTP}/statistics/during"
+        async with self.session.get(url, params=params) as r:
+            r.raise_for_status()
+            return await r.json()
