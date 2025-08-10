@@ -172,16 +172,24 @@ const timeAgo = (iso) => {
 };
 
 // map heading -> pill class + icon
-const pillFor = (title="") => {
-  const t = title.toLowerCase();
-  if (/Security/.test(t))             return { cls:"pill-sec",  icon:"<i class='mdi mdi-shield-lock-outline'></i>",  txt:"Security" };
-  if (/Comfort/.test(t))              return { cls:"pill-comf", icon:"<i class='mdi mdi-thermometer'></i>",          txt:"Comfort" };
-  if (/Energy/.test(t))               return { cls:"pill-ener", icon:"<i class='mdi mdi-flash-outline'></i>",        txt:"Energy" };
-  if (/Anomal/.test(t))               return { cls:"pill-ano",  icon:"<i class='mdi mdi-alert-circle-outline'></i>", txt:"Anomalies" };
-  if (/presence|occupancy/.test(t))   return { cls:"pill-pres", icon:"<i class='mdi mdi-account-group-outline'></i>", txt:"Presence" };
-  if (/Actions to take|next steps/.test(t)) return { cls:"pill-reco", icon:"<i class='mdi mdi-lightbulb-on-outline'></i>", txt:"Next steps" };
+function canonicalizeTitle(t="") {
+  const key = t.trim().toLowerCase().replace(/[*_:()-]/g,"").replace(/\s+/g," ");
+  for (const [k,v] of CANON.entries()) {
+    if (key === k || key.includes(k)) return v;
+  }
+  return t.trim();
+}
+
+function pillFor(title="") {
+  const t = canonicalizeTitle(title);
+  if (/^Security$/i.test(t))   return { cls:"pill-sec",  icon:"<i class='mdi mdi-shield-lock-outline'></i>",  txt:"Security" };
+  if (/^Comfort$/i.test(t))    return { cls:"pill-comf", icon:"<i class='mdi mdi-thermometer'></i>",          txt:"Comfort" };
+  if (/^Energy$/i.test(t))     return { cls:"pill-ener", icon:"<i class='mdi mdi-flash-outline'></i>",        txt:"Energy" };
+  if (/^Anomalies?$/i.test(t)) return { cls:"pill-ano",  icon:"<i class='mdi mdi-alert-circle-outline'></i>", txt:"Anomalies" };
+  if (/^Estimated Presence$/i.test(t)) return { cls:"pill-pres", icon:"<i class='mdi mdi-account-group-outline'></i>", txt:"Presence" };
+  if (/^Actions to take$/i.test(t))    return { cls:"pill-reco", icon:"<i class='mdi mdi-lightbulb-on-outline'></i>", txt:"Next steps" };
   return null;
-};
+}
 
 // Parse summary markdown → headings + first bullets + numbers
 function parsePreview(summary="") {
@@ -220,8 +228,10 @@ function parsePreview(summary="") {
 
   // Build pills from headings
   const pills = [];
-  for (const h of headings) {
-    const p = pillFor(h);
+  for (const sec of sections) {
+    const t = sec.title || "";
+    if (/summary/i.test(t)) continue;
+    const p = pillFor(t);
     if (p && !pills.find(x=>x.txt===p.txt)) pills.push(p);
     if (pills.length >= 4) break;
   }
