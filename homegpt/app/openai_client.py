@@ -15,7 +15,7 @@ KNOWN_MODELS = {
     "gpt-4o", "gpt-4o-mini",
 }
 
-DEFAULT_MODEL = "gpt-4o-mini"  # keeps things working if config is empty/bad
+DEFAULT_MODEL = "gpt-5"  # keeps things working if config is empty/bad
 
 def _pick_model(cfg_model: Optional[str]) -> str:
     model = (cfg_model or os.getenv("OPENAI_MODEL") or DEFAULT_MODEL).strip()

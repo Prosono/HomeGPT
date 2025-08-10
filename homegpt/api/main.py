@@ -212,6 +212,7 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                             now.isoformat(timespec="seconds"),
                             entity_ids=None,
                             minimal_response=True,
+                            include_start_time_state=False,
                         )
                     except Exception as e:
                         logger.warning(f"History fetch failed: {e}")
@@ -288,7 +289,6 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
     Active : unchanged JSON action planner.
     """
     cfg = _load_config()
-    gpt = OpenAIClient(model=cfg.get("model"))
     mode = (request.mode or cfg.get("mode", "passive")).lower()
     focus = request.focus or ""
     logger.info("Run analysis (UI): mode=%s focus=%s", mode, focus)
@@ -318,11 +318,12 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                 
                     try:
                         hist = await ha.history_period(
-                            start.isoformat(timespec="seconds"),
-                            now.isoformat(timespec="seconds"),
-                            entity_ids=None,
-                            minimal_response=True,
-                        )
+                        start.isoformat(timespec="seconds"),
+                        now.isoformat(timespec="seconds"),
+                        entity_ids=None,
+                        minimal_response=True,
+                        include_start_time_state=False,
+                    )
                     except Exception as e:
                         logger.warning(f"History fetch failed: {e}")
                         hist = []

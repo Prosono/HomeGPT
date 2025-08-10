@@ -236,13 +236,10 @@ class HAClient:
 
         async with self.session.get(url, params=params) as r:
             if r.status == 400 and minimal_response:
-                # Retry once without minimal_response (some setups 400 on it)
                 params.pop("minimal_response", None)
                 async with self.session.get(url, params=params) as r2:
                     r2.raise_for_status()
                     return await r2.json()
-            r.raise_for_status()
-            return await r.json()
 
     async def statistics_during(self, start_iso: str, end_iso: str,
                                 statistic_ids: list[str],
