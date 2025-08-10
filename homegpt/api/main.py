@@ -1,22 +1,19 @@
 """
 FastAPI application serving the HomeGPT dashboard and API endpoints.
 
-This version introduces three improvements:
+This version introduces these improvements:
 
-1.  The ``run_analysis`` endpoint wraps its core logic in a try/except
-    block and returns a 500 JSON response with an error message if
-    something goes wrong.  This prevents uncaught exceptions from
-    bubbling up to the client.
+1) The `run_analysis` endpoint wraps its core logic in a try/except
+   and snapshots/clears the in-memory event buffer under a lock to
+   avoid races with the websocket listener.
 
-2.  The request model for ``run_analysis`` (see ``homegpt/api/models.py``)
-    now makes the ``mode`` field optional.  The handler uses the
-    configured default mode if none is supplied.
+2) Auto-analysis now uses the *current configured mode* (passive/active)
+   rather than hard-coding "passive", and is debounced.
 
-3.  The ``history`` and ``get_history_item`` endpoints now return
-    dictionaries instead of raw tuples.  Each dictionary contains
-    ``id``, ``ts``, ``mode``, ``focus``, ``summary`` and ``actions``.
-    This ensures the front‑end receives consistent keys regardless of
-    the underlying SQLite driver.
+3) The `history` and `get_history_item` endpoints return dictionaries
+   with stable keys for the UI. Duplicate /api/history definitions removed.
+
+4) Topology context is fetched automatically and included in passive runs.
 """
 
 import asyncio
@@ -24,16 +21,25 @@ import json
 import logging
 from pathlib import Path
 from datetime import datetime, timezone
+
 import yaml
 from fastapi import FastAPI, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from homegpt.app.topology import pack_topology_for_prompt
+
 from homegpt.app.topology import fetch_topology_snapshot
 
 # ---------------- Global Event Buffer ----------------
 EVENT_BUFFER: list[dict] = []
+EVENT_BUFFER_MAX = 20000
+AUTO_ANALYSIS_EVENT_THRESHOLD = 10000       # auto-run when we reach 2k events
+AUTO_ANALYSIS_MIN_INTERVAL_SEC = 15 * 60   # debounce auto-runs (15 min)
+
+EVENT_LOCK = asyncio.Lock()
+_analysis_in_progress = asyncio.Event()
+_analysis_in_progress.clear()
+_last_auto_run_ts: float | None = None
 
 # Import DB, models, analyzer
 try:
@@ -41,9 +47,11 @@ try:
     from homegpt.api import db, analyzer
 except ImportError:
     from pydantic import BaseModel  # type: ignore
+
     class AnalysisRequest(BaseModel):  # type: ignore
         mode: str | None = None
         focus: str | None = None
+
     class Settings(BaseModel):  # type: ignore
         openai_api_key: str | None = None
         model: str | None = None
@@ -54,15 +62,17 @@ except ImportError:
         dry_run: bool | None = None
         log_level: str | None = None
         language: str | None = None
+
     class db:  # type: ignore
         @staticmethod
-        def init_db() -> None: pass
+        def init_db() -> None: ...
         @staticmethod
         def get_analyses(limit: int): return []
         @staticmethod
         def get_analysis(aid: int): return {}
         @staticmethod
-        def add_analysis(mode, focus, summary, actions): pass
+        def add_analysis(mode, focus, summary, actions): return {}
+
     analyzer = None
 
 # Import HA + OpenAI clients and policies
@@ -105,8 +115,10 @@ app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="stati
 def get_status():
     cfg = _load_config()
     last = db.get_analyses(1)
-    # Count events waiting in memory
+
+    # Count events waiting in memory (cheap read; races are fine for display)
     event_count = len(EVENT_BUFFER)
+
     # Compute seconds since last analysis if possible
     seconds_since_last: float | None = None
     if last:
@@ -130,6 +142,7 @@ def get_status():
                 seconds_since_last = (now - last_dt).total_seconds()
             except Exception:
                 seconds_since_last = None
+
     return {
         "mode": cfg.get("mode", "passive"),
         "model": cfg.get("model", "gpt-4o-mini"),
@@ -139,6 +152,7 @@ def get_status():
         "seconds_since_last": seconds_since_last,
     }
 
+
 @app.post("/api/mode")
 def set_mode(mode: str = Query(...)):
     logger.info(f"Setting mode to: {mode}")
@@ -147,33 +161,114 @@ def set_mode(mode: str = Query(...)):
     _save_config(cfg)
     return {"status": "ok", "mode": mode}
 
+
+async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
+    """Shared analysis worker used by manual and auto triggers."""
+    cfg = _load_config()
+    summary: str = ""
+    actions: list = []
+
+    if HAVE_REAL:
+        ha = HAClient()
+        gpt = OpenAIClient()
+        try:
+            if mode == "passive":
+                # Snapshot & clear events atomically
+                async with EVENT_LOCK:
+                    events = EVENT_BUFFER[-EVENT_BUFFER_MAX:]
+                    EVENT_BUFFER.clear()
+
+                if not events:
+                    summary = "No notable events recorded."
+                else:
+                    topo = await fetch_topology_snapshot(ha, max_lines=80)
+
+                    # keep newest last
+                    bullets = [
+                        f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
+                        for e in events[-AUTO_ANALYSIS_EVENT_THRESHOLD:]
+                    ]
+
+                    user = (
+                        f"Language: {cfg.get('language', 'en')}.\n"
+                        "First, here is a compact topology snapshot (areas, device counts, people), "
+                        "then the recent events (newest last). Use both to infer presence, room usage, "
+                        "energy, and anomalies.\n\n"
+                        f"{topo}\n\n"
+                        "EVENTS:\n" + "\n".join(bullets)
+                    )
+
+                    summary = gpt.complete_text(SYSTEM_PASSIVE, user)
+                    actions = []
+
+            else:
+                states = await ha.states()
+                lines = [f"{s['entity_id']}={s['state']}" for s in states[:400]]
+                user = f"Mode: {mode}\nCurrent states (subset):\n" + "\n".join(lines)
+                plan = gpt.complete_json(SYSTEM_ACTIVE, user, schema=ACTIONS_JSON_SCHEMA)
+                summary = plan.get("text") or plan.get("summary") or "No summary."
+                actions = plan.get("actions") or []
+
+        finally:
+            await ha.close()
+
+    else:
+        summary = f"Analysis in {mode} mode. Focus: {focus or 'General'}."
+        actions = ["light.turn_off living_room", "climate.set_temperature bedroom 20°C"]
+
+    # Persist
+    row = db.add_analysis(mode, focus or (f"{trigger} trigger"), summary, json.dumps(actions))
+
+    # Notify (nice for auto triggers too)
+    if HAVE_REAL:
+        try:
+            ha_notify = HAClient()
+            title = "HomeGPT – Analysis (auto)" if trigger == "auto" else "HomeGPT – Analysis"
+            await ha_notify.notify(title, summary)
+        finally:
+            try:
+                await ha_notify.close()
+            except Exception:
+                pass
+
+    return {"summary": summary, "actions": actions, "row": row}
+
+
 @app.post("/api/run")
 async def run_analysis(request: AnalysisRequest = Body(...)):
+    """
+    Manual/explicit run from the UI.
+    Passive: snapshots event buffer under a lock, clears it, fetches topology,
+             and calls the text model.
+    Active : unchanged JSON action planner.
+    """
     cfg = _load_config()
     mode = (request.mode or cfg.get("mode", "passive")).lower()
     focus = request.focus or ""
     logger.info("Run analysis (UI): mode=%s focus=%s", mode, focus)
 
     try:
-        summary: str = ""
-        actions: list = []
-
         if HAVE_REAL:
             ha = HAClient()
             gpt = OpenAIClient()
             try:
                 if mode == "passive":
-                    # 1) Build compact, automatic topology snapshot (areas/devices/entities + people from states)
+                    # 1) Snapshot & clear atomically (limit to 2000 for prompt size)
+                    async with EVENT_LOCK:
+                        events = EVENT_BUFFER[-2000:]
+                        EVENT_BUFFER.clear()
+
+                    # 2) Topology
                     topo = await fetch_topology_snapshot(ha, max_lines=80)
 
-                    # 2) Build recent event bullets (keep newest last)
+                    # 3) Bullets (newest last)
                     bullets = [
                         f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
-                        for e in EVENT_BUFFER[-2000:]
+                        for e in events
                     ]
                     events_block = "\n".join(bullets) if bullets else "(none)"
 
-                    # 3) Compose user message with topology + events
+                    # 4) Prompt
                     user = (
                         f"Language: {cfg.get('language', 'en')}.\n"
                         "First, here is a compact topology snapshot (areas, device counts, people), "
@@ -183,19 +278,16 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                         "EVENTS:\n" + events_block
                     )
 
-                    # 4) Call the text-only passive model (Option A path)
+                    # 5) Model call (Option A: plain text)
                     summary = gpt.complete_text(SYSTEM_PASSIVE, user)
-                    actions = []
-                    EVENT_BUFFER.clear()
+                    actions: list = []
 
                 else:
-                    # ACTIVE mode unchanged; still propose JSON actions
+                    # ACTIVE mode (JSON plan)
                     states = await ha.states()
                     lines = [f"{s['entity_id']}={s['state']}" for s in states[:400]]
                     user = f"Mode: {mode}\nCurrent states (subset):\n" + "\n".join(lines)
-                    plan = gpt.complete_json(
-                        SYSTEM_ACTIVE, user, schema=ACTIONS_JSON_SCHEMA
-                    )
+                    plan = gpt.complete_json(SYSTEM_ACTIVE, user, schema=ACTIONS_JSON_SCHEMA)
                     summary = plan.get("text") or plan.get("summary") or "No summary."
                     actions = plan.get("actions") or []
 
@@ -203,17 +295,13 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                 await ha.close()
 
         else:
-            # Fallback for dev envs without HA/OpenAI wiring
             summary = f"Analysis in {mode} mode. Focus: {focus or 'General'}."
-            actions = [
-                "light.turn_off living_room",
-                "climate.set_temperature bedroom 20°C",
-            ]
+            actions = ["light.turn_off living_room", "climate.set_temperature bedroom 20°C"]
 
-        # 5) Persist the analysis
+        # Persist the analysis
         row = db.add_analysis(mode, focus, summary, json.dumps(actions))
 
-        # 6) Notify in HA so the result is visible immediately
+        # Notify HA so the result is visible immediately
         if HAVE_REAL:
             try:
                 ha_notify = HAClient()
@@ -226,7 +314,7 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                 except Exception:
                     pass
 
-        # 7) Normalize the returned row shape for the UI
+        # Normalize row shape for the UI
         return {
             "status": "ok",
             "summary": summary,
@@ -240,23 +328,21 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
 
     except Exception as exc:
         logger.exception("Error in run_analysis: %s", exc)
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "message": str(exc)},
-        )
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(exc)})
+
+
 @app.get("/api/history")
 def history():
     """
-    Return the most recent analyses.  Each analysis is returned as a
-    dictionary rather than a tuple/list for clarity and ease of
-    consumption by the UI.  The fields include:
+    Return the most recent analyses as dictionaries for the UI.
 
-    - ``id``: unique row identifier
-    - ``ts``: ISO timestamp when the analysis was saved
-    - ``mode``: analysis mode (passive/active)
-    - ``focus``: user‑supplied focus string, if any
-    - ``summary``: summary text returned by the model
-    - ``actions``: JSON string of proposed or executed actions
+    Fields:
+      - id: row id
+      - ts: ISO timestamp
+      - mode: passive/active
+      - focus: optional focus string
+      - summary: model summary text
+      - actions: JSON string or list (driver dependent)
     """
     rows = db.get_analyses(50)
     result: list[dict] = []
@@ -280,26 +366,31 @@ def history():
                 logger.warning(f"Unexpected row format in history: {row}")
     return result
 
-@app.get("/api/history")
-def history():
-    rows = db.get_analyses(50)
-    result = []
-    for row in rows:
+
+@app.get("/api/history/{analysis_id}")
+def get_history_item(analysis_id: int):
+    row = db.get_analysis(analysis_id)
+    if isinstance(row, dict):
+        return row
+    try:
         rid, ts, mode, focus, summary, actions_json = row[:6]
-        result.append({
+        return {
             "id": rid,
             "ts": ts,
             "mode": mode,
             "focus": focus,
             "summary": summary,
             "actions": actions_json,
-        })
-    return result
+        }
+    except Exception:
+        logger.warning(f"Unexpected row format in history item: {row}")
+        return row
 
 
 @app.get("/api/settings")
 def get_settings():
     return _load_config()
+
 
 @app.post("/api/settings")
 def update_settings(settings: Settings):
@@ -310,20 +401,24 @@ def update_settings(settings: Settings):
     _save_config(cfg)
     return {"status": "ok"}
 
+
 # ---------------- Config Helpers ----------------
 def _load_config() -> dict:
     if CONFIG_PATH.exists():
         return yaml.safe_load(CONFIG_PATH.read_text()) or {}
     return {"mode": "passive", "model": "gpt-4o-mini", "dry_run": True}
 
+
 def _save_config(data: dict) -> None:
     CONFIG_PATH.write_text(yaml.safe_dump(data))
+
 
 # ---------------- Background Event Listener ----------------
 async def ha_event_listener():
     if not HAVE_REAL:
         logger.warning("HA integration not available — event listener disabled.")
         return
+
     ha = HAClient()
     while True:
         try:
@@ -335,14 +430,48 @@ async def ha_event_listener():
                         "from": evt["data"]["old_state"]["state"] if evt["data"]["old_state"] else None,
                         "to": evt["data"]["new_state"]["state"] if evt["data"]["new_state"] else None,
                     }
-                    EVENT_BUFFER.append(data)
-                    if len(EVENT_BUFFER) > 5000:
-                        EVENT_BUFFER.pop(0)
+                    async with EVENT_LOCK:
+                        EVENT_BUFFER.append(data)
+                        if len(EVENT_BUFFER) > EVENT_BUFFER_MAX:
+                            # bulk drop oldest
+                            del EVENT_BUFFER[: len(EVENT_BUFFER) - EVENT_BUFFER_MAX]
+
+                        # Check auto-trigger conditions
+                        should_trigger = len(EVENT_BUFFER) >= AUTO_ANALYSIS_EVENT_THRESHOLD
+                        now = asyncio.get_event_loop().time()
+                        global _last_auto_run_ts
+                        recent_enough = (_last_auto_run_ts is None) or (
+                            (now - _last_auto_run_ts) >= AUTO_ANALYSIS_MIN_INTERVAL_SEC
+                        )
+                        idle = not _analysis_in_progress.is_set()
+
+                    if should_trigger and recent_enough and idle:
+                        # fire and forget (don’t block the event loop)
+                        asyncio.create_task(_auto_trigger())
+
                 except Exception as ex:
                     logger.exception(f"Error processing event: {ex}")
         except Exception as ex:
             logger.error(f"HA websocket disconnected: {ex}, reconnecting in 5s...")
             await asyncio.sleep(5)
+
+
+async def _auto_trigger():
+    # debounce + mark running
+    _analysis_in_progress.set()
+    try:
+        cfg = _load_config()
+        mode = cfg.get("mode", "passive").lower()
+        result = await _perform_analysis(mode, focus="Auto (event threshold)", trigger="auto")
+        # success → update timestamp
+        global _last_auto_run_ts
+        _last_auto_run_ts = asyncio.get_event_loop().time()
+        logger.info("Auto analysis stored row=%s", result.get("row"))
+    except Exception as e:
+        logger.exception("Auto analysis failed: %s", e)
+    finally:
+        _analysis_in_progress.clear()
+
 
 @app.on_event("startup")
 async def startup_event():
