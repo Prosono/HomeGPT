@@ -28,7 +28,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from homegpt.app.topology import fetch_topology_snapshot
+from homegpt.app.topology import pack_topology_for_prompt
+from homegpt.app.topology import fetch_topology_snapshot, pack_states_for_prompt
 
 # ---------------- Global Event Buffer ----------------
 EVENT_BUFFER: list[dict] = []
@@ -183,7 +184,10 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                 else:
                     topo = await fetch_topology_snapshot(ha, max_lines=80)
 
-                    # keep newest last
+                    # --- Current state snapshot (single /states call) ---
+                    all_states = await ha.states()
+                    state_block = pack_states_for_prompt(all_states, max_lines=120)
+
                     bullets = [
                         f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
                         for e in events[-AUTO_ANALYSIS_EVENT_THRESHOLD:]
@@ -191,10 +195,10 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
 
                     user = (
                         f"Language: {cfg.get('language', 'en')}.\n"
-                        "First, here is a compact topology snapshot (areas, device counts, people), "
-                        "then the recent events (newest last). Use both to infer presence, room usage, "
-                        "energy, and anomalies.\n\n"
+                        "First, a compact topology snapshot; then the current state; then recent events (newest last). "
+                        "Use CURRENT STATE as ground truth for presence, open/closed, modes, and setpoints.\n\n"
                         f"{topo}\n\n"
+                        f"{state_block}\n\n"
                         "EVENTS:\n" + "\n".join(bullets)
                     )
 
@@ -259,24 +263,29 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                         EVENT_BUFFER.clear()
 
                     # 2) Topology
+                    # 1) Build compact topology snapshot
                     topo = await fetch_topology_snapshot(ha, max_lines=80)
 
-                    # 3) Bullets (newest last)
+                    # 1b) Current state snapshot (for ground truth)
+                    all_states = await ha.states()
+                    state_block = pack_states_for_prompt(all_states, max_lines=120)
+
+                    # 2) Build recent event bullets
                     bullets = [
                         f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
                         for e in events
                     ]
                     events_block = "\n".join(bullets) if bullets else "(none)"
 
-                    # 4) Prompt
+                    # 3) Compose user message
                     user = (
                         f"Language: {cfg.get('language', 'en')}.\n"
-                        "First, here is a compact topology snapshot (areas, device counts, people), "
-                        "then the recent events (newest last). Use both to infer presence, room usage, energy, "
-                        "and anomalies.\n\n"
+                        "First, topology; then CURRENT STATE; then recent events (newest last). "
+                        "Use CURRENT STATE as ground truth (avoid guessing).\n\n"
                         f"{topo}\n\n"
+                        f"{state_block}\n\n"
                         "EVENTS:\n" + events_block
-                    )
+)
 
                     # 5) Model call (Option A: plain text)
                     summary = gpt.complete_text(SYSTEM_PASSIVE, user)
