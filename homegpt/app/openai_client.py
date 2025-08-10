@@ -23,15 +23,6 @@ def _pick_model(cfg_model: Optional[str]) -> str:
                        model, ", ".join(sorted(KNOWN_MODELS)))
     return model
 
-class OpenAIClient:
-    def __init__(self, model: Optional[str] = None, timeout: float = 30.0, max_retries: int = 2):
-        # 👇 pick from explicit arg, or env, or default
-        self.model = _pick_model(model)
-        self.timeout = timeout
-        self.max_retries = max_retries
-        self._client = _client()
-        logger.info("OpenAI client ready. Model=%s", self.model)
-
 def _client() -> OpenAI:
     # expects OPENAI_API_KEY in env (add-on supports this)
     key = os.getenv("OPENAI_API_KEY")
@@ -54,6 +45,7 @@ class OpenAIClient:
     """
 
     def __init__(self, model: Optional[str] = None, timeout: float = 30.0, max_retries: int = 2):
+        # 👇 pick from explicit arg, or env, or default
         self.model = _pick_model(model)
         self.timeout = timeout
         self.max_retries = max_retries
