@@ -80,48 +80,7 @@ const prog = {
 };
 
 
-// --- Progress controller ---
-let progTimer = null;
-let progActive = false;
 
-function setBar(pct, animate=true) {
-  const bar = $("progressBar");
-  if (!animate) bar.style.transition = "none";
-  bar.style.width = pct + "%";
-  if (!animate) {
-    // force reflow to re-enable transitions next time
-    void bar.offsetWidth; 
-    bar.style.transition = "";
-  }
-}
-
-function startProgress() {
-  // reset + jump to 25%
-  clearInterval(progTimer); progTimer = null;
-  progActive = true;
-  setBar(0, false);
-  requestAnimationFrame(() => setBar(25)); // quick kick
-
-  // drift towards 75% over ~25s (but never exceed it)
-  const start = Date.now();
-  progTimer = setInterval(() => {
-    if (!progActive) return;
-    const elapsed = (Date.now() - start) / 1000;     // seconds
-    // ease: asymptotically approach 75
-    const target = 25 + Math.min(50, (50 * (elapsed / 25)));
-    const current = parseFloat(($("progressBar").style.width || "0").replace("%","")) || 0;
-    if (current < target - 0.5) setBar(current + 1.5);
-    if (current >= 75 - 0.5) { /* parked near 75 */ }
-  }, 250);
-}
-
-function finishProgress() {
-  progActive = false;
-  clearInterval(progTimer); progTimer = null;
-  setBar(100); // let CSS animate this final jump
-  // optional: after a moment, reset to 0 for next run
-  setTimeout(() => setBar(0, false), 1200);
-}
 
 // ---------- Utils ----------
 const snippet = (text, max = 140) => {
@@ -130,29 +89,6 @@ const snippet = (text, max = 140) => {
   return t.length > max ? t.slice(0, max - 1) + "…" : t;
 };
 
-// Category → icon (MDI)
-const categoryIcon = (title = "") => {
-  const t = title.toLowerCase();
-  if (/\bSecurity\b/.test(t))                       return '<i class="mdi mdi-shield-lock-outline"></i>';
-  if (/\bComfort\b/.test(t))                        return '<i class="mdi mdi-thermometer"></i>';
-  if (/\bEnergy\b/.test(t))                         return '<i class="mdi mdi-flash-outline"></i>';
-  if (/\bAnomal(y|ies)\b/.test(t))                  return '<i class="mdi mdi-alert-circle-outline"></i>';
-  if (/estimated\s+presence|occupancy/i.test(t))    return '<i class="mdi mdi-account-group-outline"></i>';
-  if (/Actions to take|next steps/i.test(t))        return '<i class="mdi mdi-lightbulb-on-outline"></i>';
-  return '<i class="mdi mdi-subtitles-outline"></i>';
-};
-
-// Category → theme class
-const categoryClass = (title = "") => {
-  const t = title.toLowerCase();
-  if (/\bSecurity\b/.test(t))                       return "theme-security";
-  if (/\bComfort\b/.test(t))                        return "theme-comfort";
-  if (/\bEnergy\b/.test(t))                         return "theme-energy";
-  if (/\bAnomal(y|ies)\b/.test(t))                  return "theme-anomalies";
-  if (/estimated\s+presence|occupancy/i.test(t))    return "theme-presence";
-  if (/Actions to take|next steps/i.test(t))        return "theme-reco";
-  return "theme-generic";
-};
 
 // Detects the first “summary” heading so we can render it as a hero
 const isSummaryTitle = (txt = "") =>
@@ -171,24 +107,68 @@ const timeAgo = (iso) => {
   const d = Math.floor(h/24); return `${d}d ago`;
 };
 
-// map heading -> pill class + icon
-function canonicalizeTitle(t="") {
-  const key = t.trim().toLowerCase().replace(/[*_:()-]/g,"").replace(/\s+/g," ");
-  for (const [k,v] of CANON.entries()) {
-    if (key === k || key.includes(k)) return v;
+// ----- Canonical category mapping -----
+const CANON = {
+  security: "security",
+  comfort: "comfort",
+  energy: "energy",
+  anomaly: "anomalies",
+  anomalies: "anomalies",
+  presence: "presence",
+  occupancy: "presence",
+  "estimated presence": "presence",
+  "actions to take": "actions",
+  "next steps": "actions",
+  actions: "actions",
+};
+
+// Return a normalized category key for a heading string
+function canonicalizeTitle(title = "") {
+  const t = String(title).toLowerCase().trim();
+  for (const key of Object.keys(CANON)) {
+    if (t.includes(key)) return CANON[key];
   }
-  return t.trim();
+  return "generic";
 }
 
-function pillFor(title="") {
-  const t = canonicalizeTitle(title);
-  if (/^Security$/i.test(t))   return { cls:"pill-sec",  icon:"<i class='mdi mdi-shield-lock-outline'></i>",  txt:"Security" };
-  if (/^Comfort$/i.test(t))    return { cls:"pill-comf", icon:"<i class='mdi mdi-thermometer'></i>",          txt:"Comfort" };
-  if (/^Energy$/i.test(t))     return { cls:"pill-ener", icon:"<i class='mdi mdi-flash-outline'></i>",        txt:"Energy" };
-  if (/^Anomalies?$/i.test(t)) return { cls:"pill-ano",  icon:"<i class='mdi mdi-alert-circle-outline'></i>", txt:"Anomalies" };
-  if (/^Estimated Presence$/i.test(t)) return { cls:"pill-pres", icon:"<i class='mdi mdi-account-group-outline'></i>", txt:"Presence" };
-  if (/^Actions to take$/i.test(t))    return { cls:"pill-reco", icon:"<i class='mdi mdi-lightbulb-on-outline'></i>", txt:"Next steps" };
-  return null;
+
+function pillFor(title = "") {
+  const c = canonicalizeTitle(title);
+  switch (c) {
+    case "security":  return { cls: "pill-sec",  icon: "<i class='mdi mdi-shield-lock-outline'></i>",   txt: "Security" };
+    case "comfort":   return { cls: "pill-comf", icon: "<i class='mdi mdi-thermometer'></i>",           txt: "Comfort" };
+    case "energy":    return { cls: "pill-ener", icon: "<i class='mdi mdi-flash-outline'></i>",         txt: "Energy" };
+    case "anomalies": return { cls: "pill-ano",  icon: "<i class='mdi mdi-alert-circle-outline'></i>",  txt: "Anomalies" };
+    case "presence":  return { cls: "pill-pres", icon: "<i class='mdi mdi-account-group-outline'></i>", txt: "Presence" };
+    case "actions":   return { cls: "pill-reco", icon: "<i class='mdi mdi-lightbulb-on-outline'></i>",  txt: "Next steps" };
+    default:          return null;
+  }
+}
+
+function categoryIcon(title = "") {
+  const c = canonicalizeTitle(title);
+  switch (c) {
+    case "security":  return '<i class="mdi mdi-shield-lock-outline"></i>';
+    case "comfort":   return '<i class="mdi mdi-thermometer"></i>';
+    case "energy":    return '<i class="mdi mdi-flash-outline"></i>';
+    case "anomalies": return '<i class="mdi mdi-alert-circle-outline"></i>';
+    case "presence":  return '<i class="mdi mdi-account-group-outline"></i>';
+    case "actions":   return '<i class="mdi mdi-lightbulb-on-outline"></i>';
+    default:          return '<i class="mdi mdi-subtitles-outline"></i>';
+  }
+}
+
+function categoryClass(title = "") {
+  const c = canonicalizeTitle(title);
+  switch (c) {
+    case "security":  return "theme-security";
+    case "comfort":   return "theme-comfort";
+    case "energy":    return "theme-energy";
+    case "anomalies": return "theme-anomalies";
+    case "presence":  return "theme-presence";
+    case "actions":   return "theme-reco";
+    default:          return "theme-generic";
+  }
 }
 
 // Split markdown into sections grouped by headings (h1–h4)
