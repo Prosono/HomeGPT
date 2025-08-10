@@ -5,6 +5,8 @@ import logging
 import aiohttp
 import websockets
 
+from urllib.parse import quote
+
 _LOGGER = logging.getLogger("homegpt.ha")
 
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
@@ -200,23 +202,45 @@ class HAClient:
         return {"areas": areas, "devices": devices, "entities": entities}
 
 
-    async def history_period(self, start_iso: str, end_iso: str | None = None,
-                            entity_ids: list[str] | None = None,
-                            minimal_response: bool = True) -> list:
+    async def history_period(
+        self,
+        start_iso: str | None,
+        end_iso: str | None,
+        entity_ids: list[str] | None = None,
+        minimal_response: bool = True,
+        include_start_time_state: bool = True,
+        significant_changes_only: bool | None = None,
+    ):
         """
-        GET /api/history/period/<start>?end_time=<end>&filter_entity_id=...&minimal_response=1
-        Returns a list of lists, each inner list is time-ordered states for one entity.
+        GET /api/history/period/<start>
+        Query params: end_time, filter_entity_id (comma-separated), minimal_response, include_start_time_state, significant_changes_only
         """
+        # Build path piece safely
+        start_path = ""
+        if start_iso:
+            start_path = "/" + quote(start_iso, safe=":T+-Z")
+
+        url = f"{BASE_HTTP}/history/period{start_path}"
+
         params = {}
         if end_iso:
             params["end_time"] = end_iso
-        if minimal_response:
-            params["minimal_response"] = "1"
         if entity_ids:
             params["filter_entity_id"] = ",".join(entity_ids)
+        if minimal_response:
+            params["minimal_response"] = "1"
+        if include_start_time_state:
+            params["include_start_time_state"] = "1"
+        if significant_changes_only is not None:
+            params["significant_changes_only"] = "1" if significant_changes_only else "0"
 
-        url = f"{BASE_HTTP}/history/period/{start_iso}"
         async with self.session.get(url, params=params) as r:
+            if r.status == 400 and minimal_response:
+                # Retry once without minimal_response (some setups 400 on it)
+                params.pop("minimal_response", None)
+                async with self.session.get(url, params=params) as r2:
+                    r2.raise_for_status()
+                    return await r2.json()
             r.raise_for_status()
             return await r.json()
 

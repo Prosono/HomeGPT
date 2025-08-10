@@ -20,14 +20,13 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from datetime import datetime, timezone
 
 import yaml
 from fastapi import FastAPI, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-
+from datetime import datetime, timezone, timedelta
 
 from homegpt.app.topology import (
     fetch_topology_snapshot,
@@ -53,7 +52,7 @@ EVENT_LOCK = asyncio.Lock()
 _analysis_in_progress = asyncio.Event()
 _analysis_in_progress.clear()
 _last_auto_run_ts: float | None = None
-
+from datetime import datetime, timezone, timedelta
 # Import DB, models, analyzer
 try:
     from homegpt.api.models import AnalysisRequest, Settings
@@ -184,7 +183,7 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
 
     if HAVE_REAL:
         ha = HAClient()
-        gpt = OpenAIClient()
+        gpt = OpenAIClient(model=cfg.get("model"))
         try:
             if mode == "passive":
                 # Snapshot & clear events atomically
@@ -204,24 +203,26 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
 
                     # ----- History for ALL entities (last N hours) -----
                     cfg_hours = int(_load_config().get("history_hours", DEFAULT_HISTORY_HOURS))
-                    from datetime import datetime, timezone, timedelta
-                    now = datetime.now(timezone.utc)
-                    start = now - timedelta(hours=cfg_hours)
-                    # Home Assistant expects ISO strings; None → all entities
+                    now = datetime.now(timezone.utc).replace(microsecond=0)
+                    start = (now - timedelta(hours=cfg_hours)).replace(microsecond=0)
+                
                     try:
                         hist = await ha.history_period(
-                            start.isoformat(),
-                            now.isoformat(),
-                            entity_ids=None,               # ALL entities tracked by recorder
+                            start.isoformat(timespec="seconds"),
+                            now.isoformat(timespec="seconds"),
+                            entity_ids=None,
                             minimal_response=True,
                         )
-                        history_block = pack_history_for_prompt(
-                            hist, max_lines=HISTORY_MAX_LINES, hours=cfg_hours
-                        )
-                    except Exception as hist_exc:
-                        logger.warning("History fetch/pack failed: %s", hist_exc)
-                        history_block = "(history unavailable)"
+                    except Exception as e:
+                        logger.warning(f"History fetch failed: {e}")
+                        hist = []
 
+                    try:
+                        history_block = pack_history_for_prompt(hist, max_lines=HISTORY_MAX_LINES)
+                    except Exception as e:
+                        logger.warning(f"History pack failed: {e}")
+                        history_block = "(history unavailable)"
+                    
                     # ----- Recent event bullets (use the snapshot we just took) -----
                     bullets = [
                         f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
@@ -287,6 +288,7 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
     Active : unchanged JSON action planner.
     """
     cfg = _load_config()
+    gpt = OpenAIClient(model=cfg.get("model"))
     mode = (request.mode or cfg.get("mode", "passive")).lower()
     focus = request.focus or ""
     logger.info("Run analysis (UI): mode=%s focus=%s", mode, focus)
@@ -294,7 +296,7 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
     try:
         if HAVE_REAL:
             ha = HAClient()
-            gpt = OpenAIClient()
+            gpt = OpenAIClient(model=cfg.get("model"))
             try:
                 if mode == "passive":
                     # 1) Snapshot & clear atomically (limit to last 2000 events for UI-sized runs)
@@ -311,21 +313,24 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
 
                     # 4) HISTORY (ALL entities for last N hours)
                     cfg_hours = int(_load_config().get("history_hours", DEFAULT_HISTORY_HOURS))
-                    from datetime import datetime, timezone, timedelta
-                    now = datetime.now(timezone.utc)
-                    start = now - timedelta(hours=cfg_hours)
+                    now = datetime.now(timezone.utc).replace(microsecond=0)
+                    start = (now - timedelta(hours=cfg_hours)).replace(microsecond=0)
+                
                     try:
                         hist = await ha.history_period(
-                            start.isoformat(),
-                            now.isoformat(),
+                            start.isoformat(timespec="seconds"),
+                            now.isoformat(timespec="seconds"),
                             entity_ids=None,
                             minimal_response=True,
                         )
-                        history_block = pack_history_for_prompt(
-                            hist, max_lines=HISTORY_MAX_LINES, hours=cfg_hours
-                        )
-                    except Exception as hist_exc:
-                        logger.warning("History fetch/pack failed: %s", hist_exc)
+                    except Exception as e:
+                        logger.warning(f"History fetch failed: {e}")
+                        hist = []
+
+                    try:
+                        history_block = pack_history_for_prompt(hist, max_lines=HISTORY_MAX_LINES)
+                    except Exception as e:
+                        logger.warning(f"History pack failed: {e}")
                         history_block = "(history unavailable)"
 
                     # 5) Recent event bullets from the snapshot we took
