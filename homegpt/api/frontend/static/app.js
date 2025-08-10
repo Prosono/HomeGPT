@@ -133,30 +133,30 @@ const snippet = (text, max = 140) => {
 // Category → icon (MDI)
 const categoryIcon = (title = "") => {
   const t = title.toLowerCase();
-  if (/\bsecurity\b/.test(t))                       return '<i class="mdi mdi-shield-lock-outline"></i>';
-  if (/\bcomfort\b/.test(t))                        return '<i class="mdi mdi-thermometer"></i>';
-  if (/\benergy\b/.test(t))                         return '<i class="mdi mdi-flash-outline"></i>';
-  if (/\banomal(y|ies)\b/.test(t))                  return '<i class="mdi mdi-alert-circle-outline"></i>';
+  if (/\bSecurity\b/.test(t))                       return '<i class="mdi mdi-shield-lock-outline"></i>';
+  if (/\bComfort\b/.test(t))                        return '<i class="mdi mdi-thermometer"></i>';
+  if (/\bEnergy\b/.test(t))                         return '<i class="mdi mdi-flash-outline"></i>';
+  if (/\bAnomal(y|ies)\b/.test(t))                  return '<i class="mdi mdi-alert-circle-outline"></i>';
   if (/estimated\s+presence|occupancy/i.test(t))    return '<i class="mdi mdi-account-group-outline"></i>';
-  if (/recommendations|next steps/i.test(t))        return '<i class="mdi mdi-lightbulb-on-outline"></i>';
+  if (/Actions to take|next steps/i.test(t))        return '<i class="mdi mdi-lightbulb-on-outline"></i>';
   return '<i class="mdi mdi-subtitles-outline"></i>';
 };
 
 // Category → theme class
 const categoryClass = (title = "") => {
   const t = title.toLowerCase();
-  if (/\bsecurity\b/.test(t))                       return "theme-security";
-  if (/\bcomfort\b/.test(t))                        return "theme-comfort";
-  if (/\benergy\b/.test(t))                         return "theme-energy";
-  if (/\banomal(y|ies)\b/.test(t))                  return "theme-anomalies";
+  if (/\bSecurity\b/.test(t))                       return "theme-security";
+  if (/\bComfort\b/.test(t))                        return "theme-comfort";
+  if (/\bEnergy\b/.test(t))                         return "theme-energy";
+  if (/\bAnomal(y|ies)\b/.test(t))                  return "theme-anomalies";
   if (/estimated\s+presence|occupancy/i.test(t))    return "theme-presence";
-  if (/recommendations|next steps/i.test(t))        return "theme-reco";
+  if (/Actions to take|next steps/i.test(t))        return "theme-reco";
   return "theme-generic";
 };
 
 // Detects the first “summary” heading so we can render it as a hero
 const isSummaryTitle = (txt = "") =>
-  /summary/i.test(txt) && !/energy|security|comfort|anomal/i.test(txt);
+  /summary/i.test(txt) && !/Energy|Security|Comfort|Anomal/i.test(txt);
 
 
 // "time ago" helper
@@ -174,12 +174,12 @@ const timeAgo = (iso) => {
 // map heading -> pill class + icon
 const pillFor = (title="") => {
   const t = title.toLowerCase();
-  if (/security/.test(t))             return { cls:"pill-sec",  icon:"<i class='mdi mdi-shield-lock-outline'></i>",  txt:"Security" };
-  if (/comfort/.test(t))              return { cls:"pill-comf", icon:"<i class='mdi mdi-thermometer'></i>",          txt:"Comfort" };
-  if (/energy/.test(t))               return { cls:"pill-ener", icon:"<i class='mdi mdi-flash-outline'></i>",        txt:"Energy" };
-  if (/anomal/.test(t))               return { cls:"pill-ano",  icon:"<i class='mdi mdi-alert-circle-outline'></i>", txt:"Anomalies" };
+  if (/Security/.test(t))             return { cls:"pill-sec",  icon:"<i class='mdi mdi-shield-lock-outline'></i>",  txt:"Security" };
+  if (/Comfort/.test(t))              return { cls:"pill-comf", icon:"<i class='mdi mdi-thermometer'></i>",          txt:"Comfort" };
+  if (/Energy/.test(t))               return { cls:"pill-ener", icon:"<i class='mdi mdi-flash-outline'></i>",        txt:"Energy" };
+  if (/Anomal/.test(t))               return { cls:"pill-ano",  icon:"<i class='mdi mdi-alert-circle-outline'></i>", txt:"Anomalies" };
   if (/presence|occupancy/.test(t))   return { cls:"pill-pres", icon:"<i class='mdi mdi-account-group-outline'></i>", txt:"Presence" };
-  if (/recommend|next steps/.test(t)) return { cls:"pill-reco", icon:"<i class='mdi mdi-lightbulb-on-outline'></i>", txt:"Next steps" };
+  if (/Actions to take|next steps/.test(t)) return { cls:"pill-reco", icon:"<i class='mdi mdi-lightbulb-on-outline'></i>", txt:"Next steps" };
   return null;
 };
 
