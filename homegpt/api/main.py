@@ -206,6 +206,7 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                     now = datetime.now(timezone.utc).replace(microsecond=0)
                     start = (now - timedelta(hours=cfg_hours)).replace(microsecond=0)
                 
+                    # after computing start/now
                     try:
                         hist = await ha.history_period(
                             start.isoformat(timespec="seconds"),
@@ -213,12 +214,12 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                             entity_ids=None,
                             minimal_response=True,
                             include_start_time_state=True,
-                            significant_changes_only=None,  # first attempt
+                            significant_changes_only=None,
                         )
                     except Exception as e:
                         logger.warning("History fetch failed (first attempt): %s", e)
                         try:
-                            # second attempt: drop minimal_response (ha.py already does) AND try significant changes only
+                            # retry with looser params
                             hist = await ha.history_period(
                                 start.isoformat(timespec="seconds"),
                                 now.isoformat(timespec="seconds"),
@@ -229,7 +230,14 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                             )
                         except Exception as e2:
                             logger.warning("History fetch failed (second attempt): %s", e2)
-                            hist = []  # keep analysis going
+                            hist = []
+
+                    # ✅ always set history_block
+                    try:
+                        history_block = pack_history_for_prompt(hist, max_lines=HISTORY_MAX_LINES)
+                    except Exception as e:
+                        logger.warning("History pack failed: %s", e)
+                        history_block = "(history unavailable)"
                     
                     # ----- Recent event bullets (use the snapshot we just took) -----
                     bullets = [
@@ -323,6 +331,7 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                     now = datetime.now(timezone.utc).replace(microsecond=0)
                     start = (now - timedelta(hours=cfg_hours)).replace(microsecond=0)
                 
+                    # after computing start/now
                     try:
                         hist = await ha.history_period(
                             start.isoformat(timespec="seconds"),
@@ -330,12 +339,12 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                             entity_ids=None,
                             minimal_response=True,
                             include_start_time_state=True,
-                            significant_changes_only=None,  # first attempt
+                            significant_changes_only=None,
                         )
                     except Exception as e:
                         logger.warning("History fetch failed (first attempt): %s", e)
                         try:
-                            # second attempt: drop minimal_response (ha.py already does) AND try significant changes only
+                            # retry with looser params
                             hist = await ha.history_period(
                                 start.isoformat(timespec="seconds"),
                                 now.isoformat(timespec="seconds"),
@@ -346,7 +355,14 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                             )
                         except Exception as e2:
                             logger.warning("History fetch failed (second attempt): %s", e2)
-                            hist = []  # keep analysis going
+                            hist = []
+
+                    # ✅ always set history_block
+                    try:
+                        history_block = pack_history_for_prompt(hist, max_lines=HISTORY_MAX_LINES)
+                    except Exception as e:
+                        logger.warning("History pack failed: %s", e)
+                        history_block = "(history unavailable)"
 
                     # 5) Recent event bullets from the snapshot we took
                     bullets = [
