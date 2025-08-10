@@ -191,50 +191,85 @@ function pillFor(title="") {
   return null;
 }
 
-// Parse summary markdown → headings + first bullets + numbers
-function parsePreview(summary="") {
+// Split markdown into sections grouped by headings (h1–h4)
+function splitSections(markdown = "") {
   let tokens = [];
-  try { tokens = marked.lexer(summary); } catch { /* noop */ }
+  try { tokens = (window.marked && marked.lexer) ? marked.lexer(markdown) : []; }
+  catch { tokens = []; }
 
-  // Collect headings in order
-  const headings = tokens.filter(t => t.type==="heading" && t.depth <= 3).map(t => t.text);
+  const sections = [];
+  let cur = { title: null, bodyTokens: [] };
 
-  // Grab first 2 meaningful list items / paragraphs
-  const points = [];
-  for (const t of tokens) {
-    if (t.type === "list") {
-      for (const it of t.items) {
-        const txt = marked.parseInline(it.text || "").replace(/<[^>]+>/g,"").trim();
-        if (txt) points.push(txt);
+  const flush = () => {
+    if (cur.title || cur.bodyTokens.length) sections.push(cur);
+    cur = { title: null, bodyTokens: [] };
+  };
+
+  for (const tok of tokens) {
+    if (tok.type === "heading" && tok.depth <= 4) {
+      flush();
+      cur.title = tok.text || "";
+    } else {
+      cur.bodyTokens.push(tok);
+    }
+  }
+  flush();
+  return sections;
+}
+
+// Build preview data: pills, first points, and a numeric series (sparkline)
+function parsePreview(summary = "") {
+  const sections = splitSections(summary);
+
+  // headings in order
+  const headings = sections
+    .map(s => s.title)
+    .filter(Boolean);
+
+  // extract first 2 points from the first section that has lists/paragraphs
+  let points = [];
+  for (const sec of sections) {
+    if (sec.bodyTokens && sec.bodyTokens.length) {
+      for (const t of sec.bodyTokens) {
+        if (t.type === "list") {
+          for (const it of t.items) {
+            const txt = (window.marked?.parseInline?.(it.text || "") || "")
+              .replace(/<[^>]+>/g, "").trim();
+            if (txt) points.push(txt);
+            if (points.length >= 2) break;
+          }
+        } else if (t.type === "paragraph") {
+          const txt = (window.marked?.parseInline?.(t.text || "") || "")
+            .replace(/<[^>]+>/g, "").trim();
+          if (txt && txt.length > 24) points.push(txt);
+        }
         if (points.length >= 2) break;
       }
-    } else if (t.type === "paragraph") {
-      const txt = marked.parseInline(t.text || "").replace(/<[^>]+>/g,"").trim();
-      if (txt && txt.length > 24) { points.push(txt); }
     }
     if (points.length >= 2) break;
   }
 
-  // Extract a short numeric series for a sparkline
-  const plain = summary.replace(/`[^`]+`/g,"");
-  const nums = (plain.match(/-?\d+(?:\.\d+)?/g) || []).map(parseFloat).filter(n=>!isNaN(n));
+  // numeric series for sparkline (scan full text)
+  const plain = String(summary).replace(/`[^`]+`/g, "");
+  const nums = (plain.match(/-?\d+(?:\.\d+)?/g) || [])
+    .map(parseFloat)
+    .filter(n => !isNaN(n));
+
   let series = null;
   if (nums.length >= 4) {
-    // Keep up to 20 evenly-sampled points
     const take = Math.min(20, nums.length);
     const step = Math.floor(nums.length / take) || 1;
-    series = nums.filter((_,i)=> i%step===0).slice(0,take);
+    series = nums.filter((_, i) => i % step === 0).slice(0, take);
   }
 
-  // Build pills from headings
+  // build pills from headings
   const pills = [];
-  for (const sec of sections) {
-    const t = sec.title || "";
-    if (/summary/i.test(t)) continue;
-    const p = pillFor(t);
-    if (p && !pills.find(x=>x.txt===p.txt)) pills.push(p);
+  for (const h of headings) {
+    const p = pillFor(h);
+    if (p && !pills.find(x => x.txt === p.txt)) pills.push(p);
     if (pills.length >= 4) break;
   }
+
   return { pills, points, series };
 }
 
