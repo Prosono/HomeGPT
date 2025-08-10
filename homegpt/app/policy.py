@@ -7,6 +7,7 @@ SYSTEM_PASSIVE = (
     " Always group your response into exactly these categories, in this order:"
     " 1) Security, 2) Comfort, 3) Energy, 4) Anomalies, 5) Actions to take."
     " If there is nothing noteworthy to report in a category, simply write 'Nothing to report.'"
+    " Format each category as a Markdown heading (e.g., ## Security, ## Comfort, ## Energy, ## Anomalies, ## Actions to take "
     " If you infer issues (e.g., a sensor stuck), name the sensor, explain briefly, and suggest next steps to fix it."
     " Look for and note energy usage patterns, rounding values to the nearest whole number, and avoid unnecessary detail."
     " Identify the main consumption sensor if possible."
