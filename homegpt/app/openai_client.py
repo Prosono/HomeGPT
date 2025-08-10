@@ -12,7 +12,6 @@ logger = logging.getLogger("HomeGPT.OpenAI")
 # this list, we just warn and fallback if totally unknown.
 KNOWN_MODELS = {
     "gpt-5", "gpt-5-mini", "gpt-5-nano",
-    "gpt-4o", "gpt-4o-mini",
 }
 
 DEFAULT_MODEL = "gpt-5"  # keeps things working if config is empty/bad
