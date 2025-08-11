@@ -180,7 +180,6 @@ function categoryClass(title = "") {
   if (!dlg || !btn || !slot) return; // page not ready / ids changed
 
   const options = [1, 2, 4, 6, 10, 24];
-  const host = ""; // same origin
 
   // Build option buttons
   slot.innerHTML = "";
@@ -213,8 +212,6 @@ function categoryClass(title = "") {
   }
 
   function showSummaryModal(title, meta, summary) {
-    // Reuse your existing overlay if app.js already has a function for this.
-    // If not, this minimal implementation will work with your IDs.
     const overlay = document.getElementById('detailsOverlay');
     const titleEl = document.getElementById('modalTitle');
     const metaEl = document.getElementById('modalMeta');
@@ -229,9 +226,7 @@ function categoryClass(title = "") {
     metaEl.textContent = meta || "";
     sumEl.textContent = summary || "";
     overlay.classList.remove('hidden');
-    if (closeEl) {
-      closeEl.onclick = () => overlay.classList.add('hidden');
-    }
+    if (closeEl) closeEl.onclick = () => overlay.classList.add('hidden');
     const backdrop = document.getElementById('overlayBackdrop');
     if (backdrop) backdrop.onclick = () => overlay.classList.add('hidden');
   }
@@ -239,24 +234,23 @@ function categoryClass(title = "") {
   async function runHistory(hours) {
     try {
       setBusy(true);
-      const res = await fetch(`/api/run_history?hours=${encodeURIComponent(hours)}`, {
+      // ✅ use api() so it works under HA Ingress or any base path
+      const res = await fetch(api(`run_history?hours=${encodeURIComponent(hours)}`), {
         method: 'POST',
         headers: { 'Accept': 'application/json' }
       });
-  
-      const raw = await res.text();            // <-- read text first
+
+      const raw = await res.text();  // read text first
       let data = null;
       try {
-        data = JSON.parse(raw);                // <-- try to parse JSON
+        data = JSON.parse(raw);
       } catch (e) {
         console.error('Non-JSON response from /api/run_history:', raw);
         throw new Error(`Non-JSON response (${res.status}): ${raw.slice(0, 200)}`);
       }
-  
-      if (!res.ok) {
-        throw new Error(data?.message || `HTTP ${res.status}`);
-      }
-  
+
+      if (!res.ok) throw new Error(data?.message || `HTTP ${res.status}`);
+
       const when = data?.row?.ts || new Date().toISOString();
       showSummaryModal(
         `History analysis (${hours}h)`,
@@ -270,6 +264,7 @@ function categoryClass(title = "") {
       setBusy(false);
     }
   }
+})(); // ✅ close the IIFE
   
 
 
