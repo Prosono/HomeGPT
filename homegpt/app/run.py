@@ -23,6 +23,7 @@ from homegpt.app.policy import SYSTEM_PASSIVE, SYSTEM_ACTIVE, ACTIONS_JSON_SCHEM
 # Environment config
 LANG = os.environ.get("LANGUAGE", "en")
 MODE = os.environ.get("MODE", "passive")
+MODEL = os.environ.get("MODEL", "gpt-5") 
 SUMMARIZE_TIME = os.environ.get("SUMMARIZE_TIME", "21:30")
 ALLOWLIST = set(json.loads(os.environ.get("CONTROL_ALLOWLIST", "[]")))
 MAX_ACTIONS_PER_HOUR = int(os.environ.get("MAX_ACTIONS_PER_HOUR", 10))
