@@ -77,10 +77,28 @@ class HAClient:
         return self._req_id
 
     async def _ws_auth(self, ws) -> None:
+        """
+        Proper HA WS handshake:
+        1) Server sends {"type": "auth_required"}
+        2) Client sends {"type": "auth", "access_token": SUPERVISOR_TOKEN}
+        3) Server sends {"type": "auth_ok"} (or "auth_invalid")
+        """
+        # 1) Read server greeting
+        first = json.loads(await ws.recv())
+        if first.get("type") != "auth_required":
+            raise RuntimeError(f"WebSocket unexpected greeting: {first}")
+
+        # 2) Send token
         await ws.send(json.dumps({"type": "auth", "access_token": SUPERVISOR_TOKEN}))
-        msg = json.loads(await ws.recv())
-        if msg.get("type") != "auth_ok":
-            raise RuntimeError(f"WebSocket auth failed: {msg}")
+
+        # 3) Expect auth_ok (or auth_invalid)
+        second = json.loads(await ws.recv())
+        t = second.get("type")
+        if t == "auth_ok":
+            return
+        if t == "auth_invalid":
+            raise RuntimeError(f"WebSocket auth_invalid: {second.get('message') or second}")
+        raise RuntimeError(f"WebSocket auth failed: {second}")
 
     async def _ws_once(self, req_type: str, payload: dict | None = None):
         """Open a short-lived WS, send a single request, return its .result."""
