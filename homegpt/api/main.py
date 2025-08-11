@@ -206,12 +206,18 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                     now = datetime.now(timezone.utc).replace(microsecond=0)
                     start = (now - timedelta(hours=cfg_hours)).replace(microsecond=0)
                 
-                    # after computing start/now
+                    # after you have: events, all_states, start, now
+
+                    # Build a compact entity list from recent events; fall back to current states
+                    entity_ids = sorted({e.get("entity_id") for e in events if e.get("entity_id")})[:100]
+                    if not entity_ids:
+                        entity_ids = sorted({s["entity_id"] for s in all_states[:300]})
+
                     try:
                         hist = await ha.history_period(
                             start.isoformat(timespec="seconds"),
                             now.isoformat(timespec="seconds"),
-                            entity_ids=None,
+                            entity_ids=entity_ids,                 # <-- was None
                             minimal_response=True,
                             include_start_time_state=True,
                             significant_changes_only=None,
@@ -219,11 +225,10 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                     except Exception as e:
                         logger.warning("History fetch failed (first attempt): %s", e)
                         try:
-                            # retry with looser params
                             hist = await ha.history_period(
                                 start.isoformat(timespec="seconds"),
                                 now.isoformat(timespec="seconds"),
-                                entity_ids=None,
+                                entity_ids=entity_ids,             # <-- was None
                                 minimal_response=False,
                                 include_start_time_state=True,
                                 significant_changes_only=True,
@@ -331,12 +336,18 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                     now = datetime.now(timezone.utc).replace(microsecond=0)
                     start = (now - timedelta(hours=cfg_hours)).replace(microsecond=0)
                 
-                    # after computing start/now
+                    # after you have: events, all_states, start, now
+
+                    # Build a compact entity list from recent events; fall back to current states
+                    entity_ids = sorted({e.get("entity_id") for e in events if e.get("entity_id")})[:100]
+                    if not entity_ids:
+                        entity_ids = sorted({s["entity_id"] for s in all_states[:300]})
+
                     try:
                         hist = await ha.history_period(
                             start.isoformat(timespec="seconds"),
                             now.isoformat(timespec="seconds"),
-                            entity_ids=None,
+                            entity_ids=entity_ids,                 # <-- was None
                             minimal_response=True,
                             include_start_time_state=True,
                             significant_changes_only=None,
@@ -344,11 +355,10 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                     except Exception as e:
                         logger.warning("History fetch failed (first attempt): %s", e)
                         try:
-                            # retry with looser params
                             hist = await ha.history_period(
                                 start.isoformat(timespec="seconds"),
                                 now.isoformat(timespec="seconds"),
-                                entity_ids=None,
+                                entity_ids=entity_ids,             # <-- was None
                                 minimal_response=False,
                                 include_start_time_state=True,
                                 significant_changes_only=True,
