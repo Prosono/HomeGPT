@@ -20,6 +20,8 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+import math
+from typing import Iterable
 
 import yaml
 from fastapi import FastAPI, Query, Body
@@ -175,6 +177,70 @@ def set_mode(mode: str = Query(...)):
     return {"status": "ok", "mode": mode}
 
 
+async def _fetch_history_all_entities(
+    ha,
+    all_states: list[dict],
+    start_dt,
+    end_dt,
+    *,
+    chunk_size: int,
+    minimal_response: bool = True,
+) -> list:
+    """Fetch history for many entities in manageable chunks, combine results."""
+    # Build full entity list from current states
+    entity_ids = [s.get("entity_id") for s in all_states if s.get("entity_id")]
+    # Safety cap (configurable; defaults below)
+    cfg = _load_config()
+    max_all = int(cfg.get("history_all_max_entities", 600))
+    if len(entity_ids) > max_all:
+        entity_ids = entity_ids[:max_all]
+
+    # Chunk
+    chunks = [entity_ids[i:i+chunk_size] for i in range(0, len(entity_ids), chunk_size)]
+    logger.info("History(all): %d entities in %d chunks (size=%d)", len(entity_ids), len(chunks), chunk_size)
+
+    start = start_dt.isoformat(timespec="seconds")
+    end = end_dt.isoformat(timespec="seconds")
+
+    combined: list = []
+    for idx, ids in enumerate(chunks, start=1):
+        try:
+            part = await ha.history_period(
+                start, end,
+                entity_ids=ids,
+                minimal_response=minimal_response,
+                include_start_time_state=True,
+                significant_changes_only=None,
+            )
+        except Exception as e:
+            logger.warning("Chunk %d/%d failed (min=%s): %s", idx, len(chunks), minimal_response, e)
+            # Retry permissive
+            try:
+                part = await ha.history_period(
+                    start, end,
+                    entity_ids=ids,
+                    minimal_response=False,
+                    include_start_time_state=True,
+                    significant_changes_only=False,
+                )
+            except Exception as e2:
+                logger.warning("Chunk %d/%d retry failed: %s", idx, len(chunks), e2)
+                part = []
+        # HA returns a list-of-lists (one list per entity)
+        if isinstance(part, list):
+            combined.extend(part)
+
+    # Diag
+    try:
+        groups = len(combined)
+        rows = sum(len(g) for g in combined if isinstance(g, list))
+        logger.info("History(all) combined: groups=%d total_rows=%d", groups, rows)
+    except Exception:
+        pass
+
+    return combined
+
+
 async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
     """Shared analysis worker used by manual and auto triggers."""
     cfg = _load_config()
@@ -311,6 +377,108 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
 
     return {"summary": summary, "actions": actions, "row": row}
 
+@app.post("/api/run_history")
+async def run_history(hours: int = Query(..., ge=1, le=48)):
+    """
+    Analyze the last N hours of history for (almost) all entities.
+    History is pulled in chunks and compressed before sending to the model.
+    """
+    cfg = _load_config()
+    mode = "passive"
+    focus = f"Manual history analysis ({hours}h)"
+    logger.info("Run history analysis: %sh", hours)
+
+    try:
+        if HAVE_REAL:
+            ha = HAClient()
+            gpt = OpenAIClient(model=cfg.get("model"))
+            try:
+                # Topology
+                topo = await fetch_topology_snapshot(ha, max_lines=TOPO_MAX_LINES)
+
+                # CURRENT STATE
+                all_states = await ha.states()
+                state_block = pack_states_for_prompt(all_states, max_lines=STATE_MAX_LINES)
+
+                # TIME WINDOW
+                now = datetime.now(timezone.utc).replace(microsecond=0)
+                start = (now - timedelta(hours=int(hours))).replace(microsecond=0)
+
+                # Chunk size & caps (configurable)
+                chunk_size = int(cfg.get("history_chunk_size", 150))
+
+                # ALL-entities history (chunked)
+                hist = await _fetch_history_all_entities(
+                    ha,
+                    all_states=all_states,
+                    start_dt=start,
+                    end_dt=now,
+                    chunk_size=chunk_size,
+                    minimal_response=True,
+                )
+
+                # Pack
+                try:
+                    history_block = pack_history_for_prompt(hist, max_lines=HISTORY_MAX_LINES)
+                except Exception as e:
+                    logger.warning("History pack failed: %s", e)
+                    history_block = "(history unavailable)"
+
+                # Compose prompt (no recent EVENT_BUFFER here by design)
+                user = (
+                    f"Language: {cfg.get('language', 'en')}.\n"
+                    "First, topology; then CURRENT STATE; then a compressed multi-entity history block from the "
+                    f"last {hours} hours. Use CURRENT STATE as ground truth (avoid guessing).\n\n"
+                    f"{topo}\n\n"
+                    f"{state_block}\n\n"
+                    f"{history_block}\n\n"
+                )
+
+                summary = gpt.complete_text(SYSTEM_PASSIVE, user)
+                actions: list = []
+
+            finally:
+                await ha.close()
+        else:
+            summary = f"History analysis for {hours} hours (simulated)."
+            actions = []
+
+        # Persist just like /api/run
+        row = db.add_analysis(mode, focus, summary, json.dumps(actions))
+
+        # Notify
+        if HAVE_REAL:
+            try:
+                ha_notify = HAClient()
+                await ha_notify.notify(f"HomeGPT – History Analysis ({hours}h)", summary)
+            except Exception as notify_exc:
+                logger.warning("Failed to send notification: %s", notify_exc)
+            finally:
+                try:
+                    await ha_notify.close()
+                except Exception:
+                    pass
+
+        return {
+            "status": "ok",
+            "summary": summary,
+            "actions": actions,
+            "row": (
+                {"id": row[0], "ts": row[1], "mode": row[2], "focus": row[3], "summary": row[4], "actions": row[5]}
+                if isinstance(row, (list, tuple))
+                else row
+            ),
+            "diag": {
+                "hours": hours,
+                "chunk_size": int(cfg.get("history_chunk_size", 150)),
+                "max_all_entities": int(cfg.get("history_all_max_entities", 600)),
+            },
+        }
+
+    except Exception as exc:
+        logger.exception("Error in run_history: %s", exc)
+        return JSONResponse(status_code=500, content={"status": "error", "message": str(exc)})
+
 
 @app.post("/api/run")
 async def run_analysis(request: AnalysisRequest = Body(...)):
@@ -349,7 +517,7 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                     start = (now - timedelta(hours=cfg_hours)).replace(microsecond=0)
                 
                     # after you have: events, all_states, start, now
-                    
+
                     # ---- Build entity list for history ----
                     entity_ids = sorted({e.get("entity_id") for e in events if e.get("entity_id")})[:100]
                     if not entity_ids:

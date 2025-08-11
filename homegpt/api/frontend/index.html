@@ -33,6 +33,29 @@
           <p class="mt-2 text-center text-sm text-gray-400">Smart Living, Simplified</p>
         </header>
 
+        <button id="btn-analyze-history"
+          class="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white rounded-lg shadow-md transition-colors">
+          Analyse history
+        </button>
+
+
+        <dialog id="dlg-history">
+          <form method="dialog" style="min-width:280px">
+            <h3>Select time range</h3>
+            <div id="history-options" style="display:flex; gap:8px; flex-wrap:wrap; margin:12px 0">
+              <!-- buttons injected by JS -->
+            </div>
+            <div style="text-align:right">
+              <button value="cancel">Cancel</button>
+            </div>
+          </form>
+        </dialog>
+        
+        <style>
+          .btn { padding:8px 12px; border-radius:8px; border:1px solid #ccc; cursor:pointer; }
+          .opt { padding:6px 10px; border-radius:6px; border:1px solid #999; cursor:pointer; }
+        </style>
+
       <!-- Controls -->
       <div class="flex flex-wrap items-center justify-between mb-6 gap-4">
         <div class="flex items-center">
@@ -81,6 +104,9 @@
     </div>
   </div>
 
-  <script src="static/app.js" defer></script>
+
+
+  <script src="static/app.js" defer> </script>
 </body>
 </html>
+ 

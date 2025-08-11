@@ -171,6 +171,102 @@ function categoryClass(title = "") {
   }
 }
 
+// ==== History Analysis UI ====
+(function () {
+  // Elements
+  const dlg = document.getElementById('dlg-history');
+  const btn = document.getElementById('btn-analyze-history');
+  const slot = document.getElementById('history-options');
+  if (!dlg || !btn || !slot) return; // page not ready / ids changed
+
+  const options = [1, 2, 4, 6, 10, 24];
+  const host = ""; // same origin
+
+  // Build option buttons
+  slot.innerHTML = "";
+  options.forEach(h => {
+    const b = document.createElement('button');
+    b.type = "button";
+    b.className = "opt";
+    b.textContent = `${h}h`;
+    b.addEventListener('click', async () => {
+      dlg.close();
+      await runHistory(h);
+    });
+    slot.appendChild(b);
+  });
+
+  // Open dialog
+  btn.addEventListener('click', () => dlg.showModal());
+
+  // Optional helpers from your existing UI
+  const progressBar = document.getElementById('progressBar');
+
+  function setBusy(on) {
+    if (progressBar) {
+      progressBar.style.width = on ? "100%" : "0%";
+      progressBar.style.transitionDuration = on ? "2000ms" : "500ms";
+    }
+    btn.disabled = !!on;
+    btn.style.opacity = on ? 0.6 : 1;
+    btn.style.pointerEvents = on ? "none" : "auto";
+  }
+
+  function showSummaryModal(title, meta, summary) {
+    // Reuse your existing overlay if app.js already has a function for this.
+    // If not, this minimal implementation will work with your IDs.
+    const overlay = document.getElementById('detailsOverlay');
+    const titleEl = document.getElementById('modalTitle');
+    const metaEl = document.getElementById('modalMeta');
+    const sumEl = document.getElementById('modalSummary');
+    const closeEl = document.getElementById('modalClose');
+
+    if (!overlay || !titleEl || !metaEl || !sumEl) {
+      alert(summary || '(no summary)');
+      return;
+    }
+    titleEl.textContent = title;
+    metaEl.textContent = meta || "";
+    sumEl.textContent = summary || "";
+    overlay.classList.remove('hidden');
+    if (closeEl) {
+      closeEl.onclick = () => overlay.classList.add('hidden');
+    }
+    const backdrop = document.getElementById('overlayBackdrop');
+    if (backdrop) backdrop.onclick = () => overlay.classList.add('hidden');
+  }
+
+  async function runHistory(hours) {
+    try {
+      setBusy(true);
+      const res = await fetch(`/api/run_history?hours=${encodeURIComponent(hours)}`, {
+        method: 'POST'
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || 'Request failed');
+
+      // If your app.js already renders rows/cards for /api/run,
+      // you can reuse that path here by feeding data.row into it.
+      // For now, show the modal with summary:
+      const when = data?.row?.ts || new Date().toISOString();
+      showSummaryModal(
+        `History analysis (${hours}h)`,
+        `Run at ${when}`,
+        data?.summary || '(no summary)'
+      );
+
+      // TODO (optional): if you have a function like addRowToGrid(data.row), call it here.
+
+    } catch (e) {
+      console.error(e);
+      alert('History analysis failed: ' + e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+})();
+
+
 // Split markdown into sections grouped by headings (h1–h4)
 function splitSections(markdown = "") {
   let tokens = [];
