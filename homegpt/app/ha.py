@@ -2,205 +2,157 @@ import os
 import json
 import asyncio
 import logging
+from urllib.parse import quote
+
 import aiohttp
 import websockets
 
-from urllib.parse import quote
-
 _LOGGER = logging.getLogger("homegpt.ha")
 
+# Supervisor-provided auth and endpoints
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 BASE_HTTP = os.environ.get("SUPERVISOR_API", "http://supervisor/core/api")
 WS_URL = "ws://supervisor/core/websocket"
 
-WS_OPTS = {
-    # Accept arbitrarily large frames (entity registry can be big)
-    "max_size": None,            # or set to e.g. 16 * 1024 * 1024
-    # If you still hit size issues after inflation, you can add:
-    # "compression": None,
-    "ping_interval": 30,
-    "ping_timeout": 30,
-}
 
 class HAClient:
-    def __init__(self):
+    """
+    Thin async client for Home Assistant when running inside a Supervisor add-on.
+    Uses REST for simple reads/writes and WebSocket for event stream + registries.
+    """
+
+    def __init__(self) -> None:
         if not SUPERVISOR_TOKEN:
             raise RuntimeError(
                 "SUPERVISOR_TOKEN not set. Ensure your add-on config.yaml enables "
                 "homeassistant_api: true (and restart the add-on), or provide a "
-                "long-lived token flow."
+                "long-lived token via environment."
             )
+        self.session = aiohttp.ClientSession(
+            headers={
+                "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
+                "Content-Type": "application/json",
+            },
+            timeout=aiohttp.ClientTimeout(total=60),
+        )
+        self._req_id = 1
 
-        self.session = aiohttp.ClientSession(headers={
-            "Authorization": f"Bearer {SUPERVISOR_TOKEN}",
-            "Content-Type": "application/json",
-        })
-        self._listeners = []  # callback functions for events
-        self._req_id = 100    # ids for one-shot WS calls
+    async def close(self) -> None:
+        """Close the underlying HTTP session."""
+        try:
+            await self.session.close()
+        except Exception:
+            pass
 
-    async def close(self):
-        """Close aiohttp session."""
-        await self.session.close()
+    # ---------------- REST helpers ----------------
 
-    async def states(self):
-        """Get all entity states from Home Assistant."""
-        async with self.session.get(f"{BASE_HTTP}/states") as r:
+    async def states(self) -> list[dict]:
+        """Return all entity states."""
+        url = f"{BASE_HTTP}/states"
+        async with self.session.get(url) as r:
             r.raise_for_status()
             return await r.json()
 
-    async def call_service(self, domain: str, service: str, data: dict):
+    async def call_service(self, domain: str, service: str, data: dict) -> dict:
         """Call a Home Assistant service."""
         url = f"{BASE_HTTP}/services/{domain}/{service}"
-        async with self.session.post(url, json=data) as r:
+        async with self.session.post(url, data=json.dumps(data)) as r:
             txt = await r.text()
             if r.status >= 400:
                 _LOGGER.error("Service call failed %s: %s", url, txt)
             r.raise_for_status()
             return json.loads(txt) if txt else {}
 
-    async def notify(self, title: str, message: str, notification_id: str | None = None):
-        """Send a persistent notification to Home Assistant."""
-        data = {"title": title, "message": message}
+    async def notify(self, title: str, message: str, notification_id: str | None = None) -> dict:
+        """Send a persistent notification."""
+        data: dict = {"title": title, "message": message}
         if notification_id:
             data["notification_id"] = notification_id
         return await self.call_service("persistent_notification", "create", data)
 
-    def add_listener(self, callback):
-        """Register a callback that will be called with each event."""
-        self._listeners.append(callback)
-
-    async def _handle_event(self, event):
-        """Call all registered listeners with the event."""
-        for cb in self._listeners:
-            try:
-                await cb(event)
-            except Exception as e:
-                _LOGGER.error(f"Error in event listener {cb}: {e}")
-
-    async def websocket_events(self):
-        """
-        Async generator that yields state_changed events from Home Assistant.
-        Will automatically reconnect if the connection drops.
-        """
-        while True:
-            try:
-                _LOGGER.info("Connecting to Home Assistant WebSocket...")
-                # >>> pass WS_OPTS here <<<
-                async with websockets.connect(WS_URL, **WS_OPTS) as ws:
-                    # Authenticate
-                    auth_msg = await ws.recv()  # Expect auth_required
-                    _LOGGER.debug(f"Auth message: {auth_msg}")
-
-                    await ws.send(json.dumps({
-                        "type": "auth",
-                        "access_token": SUPERVISOR_TOKEN
-                    }))
-
-                    msg = json.loads(await ws.recv())
-                    if msg.get("type") != "auth_ok":
-                        raise Exception(f"WS auth failed: {msg}")
-                    _LOGGER.info("WebSocket authenticated")
-
-                    # Subscribe to state_changed events
-                    await ws.send(json.dumps({
-                        "id": 1,
-                        "type": "subscribe_events",
-                        "event_type": "state_changed"
-                    }))
-                    result = json.loads(await ws.recv())
-                    if not result.get("success", False):
-                        raise Exception(f"Subscribe failed: {result}")
-                    _LOGGER.info("Subscribed to state_changed events")
-
-                    # Yield incoming events
-                    async for raw in ws:
-                        try:
-                            evt = json.loads(raw)
-                            if evt.get("type") == "event":
-                                event_data = evt["event"]
-                                _LOGGER.debug(f"WS Event: {event_data}")
-
-                                # Send to registered listeners
-                                await self._handle_event(event_data)
-
-                                # Yield to async for consumers
-                                yield event_data
-
-                        except json.JSONDecodeError:
-                            _LOGGER.warning(f"Invalid JSON from WS: {raw}")
-
-            except Exception as e:
-                _LOGGER.error(f"WebSocket error: {e}, retrying in 5s...")
-                await asyncio.sleep(5)
-
-    # ---------------------------------------------------------------------
-    # Registry helpers: short-lived WS connections so we don't touch the
-    # streaming connection above. Each call authenticates, requests data,
-    # waits for the matching id, returns result, and closes.
-    # ---------------------------------------------------------------------
+    # ---------------- WebSocket helpers ----------------
 
     def _next_id(self) -> int:
         self._req_id += 1
         return self._req_id
 
+    async def _ws_auth(self, ws) -> None:
+        await ws.send(json.dumps({"type": "auth", "access_token": SUPERVISOR_TOKEN}))
+        msg = json.loads(await ws.recv())
+        if msg.get("type") != "auth_ok":
+            raise RuntimeError(f"WebSocket auth failed: {msg}")
+
     async def _ws_once(self, req_type: str, payload: dict | None = None):
-        """
-        Open a short-lived WebSocket connection, auth, request `req_type`,
-        return the .result, then close.
-        """
-        _LOGGER.debug("WS once -> %s", req_type)
-        # >>> and here too <<<
-        async with websockets.connect(WS_URL, **WS_OPTS) as ws:
-            # auth_required
-            await ws.recv()
-            # auth
-            await ws.send(json.dumps({
-                "type": "auth",
-                "access_token": SUPERVISOR_TOKEN
-            }))
-            auth_reply = json.loads(await ws.recv())
-            if auth_reply.get("type") != "auth_ok":
-                raise RuntimeError(f"WS auth failed (one-shot): {auth_reply}")
-
-            req_id = self._next_id()
-            msg = {"id": req_id, "type": req_type}
+        """Open a short-lived WS, send a single request, return its .result."""
+        req_id = self._next_id()
+        async with websockets.connect(WS_URL, open_timeout=10, close_timeout=5) as ws:
+            await self._ws_auth(ws)
+            body = {"id": req_id, "type": req_type}
             if payload:
-                msg.update(payload)
-            await ws.send(json.dumps(msg))
-
+                body.update(payload)
+            await ws.send(json.dumps(body))
+            # Wait for matching id
             while True:
-                raw = await ws.recv()
-                try:
-                    resp = json.loads(raw)
-                except json.JSONDecodeError:
-                    _LOGGER.warning("Non-JSON WS reply on one-shot: %r", raw)
+                msg = json.loads(await ws.recv())
+                if msg.get("id") != req_id:
                     continue
-                if resp.get("id") == req_id:
-                    if resp.get("success") is False:
-                        raise RuntimeError(f"HA WS error for {req_type}: {resp}")
-                    return resp.get("result", [])
+                if msg.get("type") != "result":
+                    raise RuntimeError(f"Unexpected WS message: {msg}")
+                if not msg.get("success", False):
+                    raise RuntimeError(f"WS call {req_type} failed: {msg}")
+                return msg.get("result")
 
-    async def list_areas(self):
-        """Return area registry list."""
+    async def websocket_events(self):
+        """
+        Async generator yielding Home Assistant state_changed events.
+        Automatically reconnects on errors.
+        """
+        while True:
+            try:
+                async with websockets.connect(WS_URL, open_timeout=10, close_timeout=5) as ws:
+                    await self._ws_auth(ws)
+                    # subscribe
+                    await ws.send(
+                        json.dumps(
+                            {"id": self._next_id(), "type": "subscribe_events", "event_type": "state_changed"}
+                        )
+                    )
+                    # ack
+                    ack = json.loads(await ws.recv())
+                    if not ack.get("success", False):
+                        raise RuntimeError(f"subscribe_events failed: {ack}")
+                    _LOGGER.info("Subscribed to state_changed events")
+
+                    async for raw in ws:
+                        try:
+                            msg = json.loads(raw)
+                            if msg.get("type") == "event":
+                                yield msg.get("event")
+                        except Exception as e:
+                            _LOGGER.warning("Error decoding WS event: %s", e)
+            except Exception as e:
+                _LOGGER.error("WS disconnected (%s); reconnecting in 5s...", e)
+                await asyncio.sleep(5)
+
+    # ---------------- Registries ----------------
+
+    async def list_areas(self) -> list[dict]:
         return await self._ws_once("config/area_registry/list")
 
-    async def list_devices(self):
-        """Return device registry list."""
+    async def list_devices(self) -> list[dict]:
         return await self._ws_once("config/device_registry/list")
 
-    async def list_entities(self):
-        """Return entity registry list."""
+    async def list_entities(self) -> list[dict]:
         return await self._ws_once("config/entity_registry/list")
 
-    async def list_registries(self):
-        """Fetch areas, devices, entities in parallel."""
+    async def list_registries(self) -> dict:
+        """Fetch areas, devices, entities concurrently."""
         areas, devices, entities = await asyncio.gather(
-            self.list_areas(),
-            self.list_devices(),
-            self.list_entities(),
+            self.list_areas(), self.list_devices(), self.list_entities()
         )
         return {"areas": areas, "devices": devices, "entities": entities}
 
+    # ---------------- History & Statistics ----------------
 
     async def history_period(
         self,
@@ -210,23 +162,30 @@ class HAClient:
         minimal_response: bool = True,
         include_start_time_state: bool = True,
         significant_changes_only: bool | None = None,
-    ):
+    ) -> list:
         """
-        GET /api/history/period/<start>
-        Query params: end_time, filter_entity_id (comma-separated), minimal_response, include_start_time_state, significant_changes_only
+        Wrapper for:
+          GET /api/history/period/<start>?end_time=...&filter_entity_id=a,b&minimal_response=1&include_start_time_state=1
+
+        NOTE: Newer HA builds will 400 if filter_entity_id is omitted. We therefore
+        require a non-empty entity_ids and skip the call if empty.
         """
-        # Build path piece safely
+        # Build URL path safely (allow colon, T, +, -, Z)
         start_path = ""
         if start_iso:
             start_path = "/" + quote(start_iso, safe=":T+-Z")
 
         url = f"{BASE_HTTP}/history/period{start_path}"
 
-        params = {}
-        if end_iso:
-            params["end_time"] = end_iso
-        if entity_ids:
-            params["filter_entity_id"] = ",".join(entity_ids)
+        # Require entity list to avoid 400
+        if not entity_ids:
+            _LOGGER.info("history_period skipped: empty entity_ids")
+            return []
+
+        params: dict[str, str] = {
+            "end_time": end_iso or "",
+            "filter_entity_id": ",".join(entity_ids),
+        }
         if minimal_response:
             params["minimal_response"] = "1"
         if include_start_time_state:
@@ -234,16 +193,42 @@ class HAClient:
         if significant_changes_only is not None:
             params["significant_changes_only"] = "1" if significant_changes_only else "0"
 
+        # First attempt
         async with self.session.get(url, params=params) as r:
             if r.status == 400 and minimal_response:
+                # Retry without minimal_response
+                _LOGGER.warning("history_period 400; retrying without minimal_response")
                 params.pop("minimal_response", None)
                 async with self.session.get(url, params=params) as r2:
                     r2.raise_for_status()
-                    return await r2.json()
+                    data = await r2.json()
+                    # Diagnostics
+                    try:
+                        groups = len(data) if isinstance(data, list) else 0
+                        rows = sum(len(g) for g in data if isinstance(g, list))
+                        _LOGGER.info("HA history OK (retry): groups=%d total_rows=%d", groups, rows)
+                    except Exception:
+                        pass
+                    return data
 
-    async def statistics_during(self, start_iso: str, end_iso: str,
-                                statistic_ids: list[str],
-                                period: str = "hour") -> list[dict]:
+            r.raise_for_status()
+            data = await r.json()
+            # Diagnostics
+            try:
+                groups = len(data) if isinstance(data, list) else 0
+                rows = sum(len(g) for g in data if isinstance(g, list))
+                _LOGGER.info("HA history OK: groups=%d total_rows=%d", groups, rows)
+            except Exception:
+                pass
+            return data
+
+    async def statistics_during(
+        self,
+        start_iso: str,
+        end_iso: str,
+        statistic_ids: list[str],
+        period: str = "hour",
+    ) -> list[dict]:
         """
         GET /api/statistics/during?start_time=...&end_time=...&statistic_ids=a,b&period=hour
         Good for energy/power series without huge payloads.

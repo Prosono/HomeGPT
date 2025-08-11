@@ -208,16 +208,20 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                 
                     # after you have: events, all_states, start, now
 
-                    # Build a compact entity list from recent events; fall back to current states
+                    # ---- Build entity list for history ----
                     entity_ids = sorted({e.get("entity_id") for e in events if e.get("entity_id")})[:100]
                     if not entity_ids:
-                        entity_ids = sorted({s["entity_id"] for s in all_states[:300]})
+                        # fallback: take a subset of current states
+                        entity_ids = sorted({s.get("entity_id") for s in all_states if s.get("entity_id")})[:300]
 
+                    logger.info("History query (worker): %d ids (first 15): %s", len(entity_ids), entity_ids[:15])
+
+                    # ---- Fetch history with a permissive fallback ----
                     try:
                         hist = await ha.history_period(
                             start.isoformat(timespec="seconds"),
                             now.isoformat(timespec="seconds"),
-                            entity_ids=entity_ids,                 # <-- was None
+                            entity_ids=entity_ids,
                             minimal_response=True,
                             include_start_time_state=True,
                             significant_changes_only=None,
@@ -228,14 +232,22 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                             hist = await ha.history_period(
                                 start.isoformat(timespec="seconds"),
                                 now.isoformat(timespec="seconds"),
-                                entity_ids=entity_ids,             # <-- was None
+                                entity_ids=entity_ids,
                                 minimal_response=False,
                                 include_start_time_state=True,
-                                significant_changes_only=True,
+                                significant_changes_only=False,   # most permissive
                             )
                         except Exception as e2:
                             logger.warning("History fetch failed (second attempt): %s", e2)
                             hist = []
+
+                    # ---- Diagnostics: what did we actually get? ----
+                    try:
+                        groups = len(hist) if isinstance(hist, list) else 0
+                        rows = sum(len(g) for g in hist if isinstance(g, list))
+                        logger.info("History fetched for prompt (worker): groups=%d total_rows=%d", groups, rows)
+                    except Exception:
+                        pass
 
                     # ✅ always set history_block
                     try:
@@ -337,17 +349,21 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                     start = (now - timedelta(hours=cfg_hours)).replace(microsecond=0)
                 
                     # after you have: events, all_states, start, now
-
-                    # Build a compact entity list from recent events; fall back to current states
+                    
+                    # ---- Build entity list for history ----
                     entity_ids = sorted({e.get("entity_id") for e in events if e.get("entity_id")})[:100]
                     if not entity_ids:
-                        entity_ids = sorted({s["entity_id"] for s in all_states[:300]})
+                        # fallback: take a subset of current states
+                        entity_ids = sorted({s.get("entity_id") for s in all_states if s.get("entity_id")})[:300]
 
+                    logger.info("History query (worker): %d ids (first 15): %s", len(entity_ids), entity_ids[:15])
+
+                    # ---- Fetch history with a permissive fallback ----
                     try:
                         hist = await ha.history_period(
                             start.isoformat(timespec="seconds"),
                             now.isoformat(timespec="seconds"),
-                            entity_ids=entity_ids,                 # <-- was None
+                            entity_ids=entity_ids,
                             minimal_response=True,
                             include_start_time_state=True,
                             significant_changes_only=None,
@@ -358,14 +374,22 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                             hist = await ha.history_period(
                                 start.isoformat(timespec="seconds"),
                                 now.isoformat(timespec="seconds"),
-                                entity_ids=entity_ids,             # <-- was None
+                                entity_ids=entity_ids,
                                 minimal_response=False,
                                 include_start_time_state=True,
-                                significant_changes_only=True,
+                                significant_changes_only=False,   # most permissive
                             )
                         except Exception as e2:
                             logger.warning("History fetch failed (second attempt): %s", e2)
                             hist = []
+
+                    # ---- Diagnostics: what did we actually get? ----
+                    try:
+                        groups = len(hist) if isinstance(hist, list) else 0
+                        rows = sum(len(g) for g in hist if isinstance(g, list))
+                        logger.info("History fetched for prompt (worker): groups=%d total_rows=%d", groups, rows)
+                    except Exception:
+                        pass
 
                     # ✅ always set history_block
                     try:
