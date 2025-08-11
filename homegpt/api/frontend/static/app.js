@@ -240,23 +240,29 @@ function categoryClass(title = "") {
     try {
       setBusy(true);
       const res = await fetch(`/api/run_history?hours=${encodeURIComponent(hours)}`, {
-        method: 'POST'
+        method: 'POST',
+        headers: { 'Accept': 'application/json' }
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.message || 'Request failed');
-
-      // If your app.js already renders rows/cards for /api/run,
-      // you can reuse that path here by feeding data.row into it.
-      // For now, show the modal with summary:
+  
+      const raw = await res.text();            // <-- read text first
+      let data = null;
+      try {
+        data = JSON.parse(raw);                // <-- try to parse JSON
+      } catch (e) {
+        console.error('Non-JSON response from /api/run_history:', raw);
+        throw new Error(`Non-JSON response (${res.status}): ${raw.slice(0, 200)}`);
+      }
+  
+      if (!res.ok) {
+        throw new Error(data?.message || `HTTP ${res.status}`);
+      }
+  
       const when = data?.row?.ts || new Date().toISOString();
       showSummaryModal(
         `History analysis (${hours}h)`,
         `Run at ${when}`,
         data?.summary || '(no summary)'
       );
-
-      // TODO (optional): if you have a function like addRowToGrid(data.row), call it here.
-
     } catch (e) {
       console.error(e);
       alert('History analysis failed: ' + e.message);
@@ -264,7 +270,7 @@ function categoryClass(title = "") {
       setBusy(false);
     }
   }
-})();
+  
 
 
 // Split markdown into sections grouped by headings (h1–h4)
