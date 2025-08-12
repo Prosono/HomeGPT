@@ -534,10 +534,35 @@ function openModal(row) {
   meta.textContent = [row.ts, row.focus ? `Focus: ${row.focus}` : ""].filter(Boolean).join(" • ");
 
   const raw = row.summary ?? "(No summary)";
-  let tokens = [];
-  try { tokens = marked.lexer(raw); } catch { container.textContent = raw; }
 
-  // Group tokens by headings (h1–h4)
+  // --- normalize bare labels into real Markdown headings ---
+  const _escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const coerceHeadings = (md = "") => {
+    const labels = [
+      "Passive summary","Summary","Details","Security","Comfort",
+      "Energy","Anomalies","Presence","Occupancy","Actions to take","Actions","Next steps"
+    ];
+    const group = labels.map(_escRe).join("|");
+    md = String(md).replace(/\r\n/g, "\n");
+    // lines like "Security", "**Security**", "Actions to take:" -> "### Security"
+    const re = new RegExp(String.raw`^\s*(?:\*\*|__)?\s*(${group})\s*(?:\*\*|__)?\s*:?\s*$`, "gmi");
+    md = md.replace(re, (_m, lbl) => `### ${lbl}`);
+    // collapse excessive blank lines
+    return md.replace(/\n{3,}/g, "\n\n");
+  };
+
+  const prepped = coerceHeadings(raw);
+
+  // --- tokenize with Marked ---
+  let tokens = [];
+  try {
+    tokens = (window.marked && marked.lexer) ? marked.lexer(prepped) : [];
+  } catch {
+    container.textContent = raw;
+    return;
+  }
+
+  // --- group tokens by headings (h1–h4) ---
   const sections = [];
   let current = { title: null, bodyTokens: [] };
   const flush = () => {
@@ -545,15 +570,15 @@ function openModal(row) {
     current = { title: null, bodyTokens: [] };
   };
   for (const tok of tokens) {
-    if (tok.type === "heading" && tok.depth <= 4) { flush(); current.title = tok.text; }
+    if (tok.type === "heading" && tok.depth <= 4) { flush(); current.title = tok.text || ""; }
     else { current.bodyTokens.push(tok); }
   }
   flush();
 
-  // Build: hero (first “Summary …” section) + masonry for the rest
+  // --- build UI: optional hero + masonry cards ---
   container.innerHTML = "";
 
-  // 1) Hero banner (optional)
+  // 1) Hero banner (if first section is a "Summary")
   const first = sections[0];
   if (first && isSummaryTitle(first.title || "")) {
     const hero = document.createElement("div");
@@ -565,21 +590,19 @@ function openModal(row) {
     catch { heroHtml = `<p>${raw}</p>`; }
 
     hero.innerHTML = `
-      <div class="hero-head">
-        ${heroIcon}
-        <span>${heroTitle}</span>
-      </div>
+      <div class="hero-head">${heroIcon}<span>${heroTitle}</span></div>
       <div class="hero-body">${heroHtml}</div>
     `;
     container.appendChild(hero);
-    sections.shift(); // remove from list; remaining go to masonry
+    sections.shift(); // remaining go to masonry
   }
 
-  // 2) Masonry wrap
+  // 2) Masonry container
   const wrap = document.createElement("div");
-  wrap.className = "modal-masonry"; // CSS columns → variable height cards
+  wrap.className = "modal-masonry"; // CSS columns → variable-height cards
   container.appendChild(wrap);
 
+  // 3) Card per section
   sections.forEach((sec, idx) => {
     const t = sec.title || (idx === 0 ? "Details" : `Section ${idx + 1}`);
     const theme = categoryClass(t);
@@ -599,7 +622,7 @@ function openModal(row) {
     body.innerHTML = html;
     card.appendChild(body);
 
-    // Numbers → tiny line chart
+    // Optional: tiny number sparkline
     const plain = body.textContent || "";
     const nums = (plain.match(/-?\d+(?:\.\d+)?/g) || []).map(parseFloat).filter(n => !isNaN(n));
     if (nums.length >= 3) {
@@ -623,16 +646,11 @@ function openModal(row) {
           options: {
             responsive: true, maintainAspectRatio: false,
             plugins: { legend: { display: !!unit } },
-            scales: {
-              x: { display: false },
-              y: { ticks: { color: "#e5e7eb" }, grid: { color: "rgba(255,255,255,0.10)" } }
-            }
+            scales: { x: { display: false }, y: { ticks: { color: "#e5e7eb" }, grid: { color: "rgba(255,255,255,0.10)" } } }
           }
         });
         canvas.style.height = "120px";
-      } catch (e) {
-        console.warn("Chart render failed:", e);
-      }
+      } catch (e) { console.warn("Chart render failed:", e); }
     }
 
     wrap.appendChild(card);
