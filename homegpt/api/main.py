@@ -15,7 +15,8 @@ This version introduces these improvements:
 
 4) Topology context is fetched automatically and included in passive runs.
 """
-
+import os
+from zoneinfo import ZoneInfo
 import asyncio
 import json
 import logging
@@ -88,6 +89,35 @@ except ImportError:
         def add_analysis(mode, focus, summary, actions): return {}
 
     analyzer = None
+
+# Cache the local tz once
+_LOCAL_TZ: ZoneInfo | None = None
+def _get_local_tz() -> ZoneInfo:
+    global _LOCAL_TZ
+    if _LOCAL_TZ is not None:
+        return _LOCAL_TZ
+    tzname = os.environ.get("TZ")
+    try:
+        _LOCAL_TZ = ZoneInfo(tzname) if tzname else ZoneInfo("UTC")
+    except Exception:
+        _LOCAL_TZ = ZoneInfo("UTC")
+    return _LOCAL_TZ
+
+def _ts_to_local_iso(ts_val) -> str | None:
+    """Parse a DB timestamp (naive or tz-aware), treat naive as UTC, return ISO with local offset (+hh:mm)."""
+    if not ts_val:
+        return None
+    s = str(ts_val)
+    try:
+        # Accept 'Z' or offset; if naive, assume UTC
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.astimezone(_get_local_tz())
+        return dt.replace(microsecond=0).isoformat()  # e.g., 2025-08-11T14:33:00+02:00
+    except Exception:
+        # If parsing fails, return as-is
+        return s
 
 # Import HA + OpenAI clients and policies
 try:
@@ -464,7 +494,7 @@ async def run_history(hours: int = Query(..., ge=1, le=48)):
             "summary": summary,
             "actions": actions,
             "row": (
-                {"id": row[0], "ts": row[1], "mode": row[2], "focus": row[3], "summary": row[4], "actions": row[5]}
+                {"id": row[0], "ts": _ts_to_local_iso(row[1]), "mode": row[2], "focus": row[3], "summary": row[4], "actions": row[5]}
                 if isinstance(row, (list, tuple))
                 else row
             ),
@@ -626,7 +656,7 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
             "summary": summary,
             "actions": actions,
             "row": (
-                {"id": row[0], "ts": row[1], "mode": row[2], "focus": row[3], "summary": row[4], "actions": row[5]}
+                {"id": row[0], "ts": _ts_to_local_iso(row[1]), "mode": row[2], "focus": row[3], "summary": row[4], "actions": row[5]}
                 if isinstance(row, (list, tuple))
                 else row
             ),
@@ -658,7 +688,7 @@ def history():
             result.append(
                 {
                     "id": rid,
-                    "ts": ts,
+                    "ts": _ts_to_local_iso(ts),   # was ts
                     "mode": mode,
                     "focus": focus,
                     "summary": summary,
@@ -681,12 +711,12 @@ def get_history_item(analysis_id: int):
     try:
         rid, ts, mode, focus, summary, actions_json = row[:6]
         return {
-            "id": rid,
-            "ts": ts,
-            "mode": mode,
-            "focus": focus,
-            "summary": summary,
-            "actions": actions_json,
+                    "id": rid,
+                    "ts": _ts_to_local_iso(ts),   # was ts
+                    "mode": mode,
+                    "focus": focus,
+                    "summary": summary,
+                    "actions": actions_json,
         }
     except Exception:
         logger.warning(f"Unexpected row format in history item: {row}")
