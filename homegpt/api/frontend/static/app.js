@@ -131,6 +131,31 @@ function canonicalizeTitle(title = "") {
   return "generic";
 }
 
+function _escapeRe(s){return s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");}
+
+function coerceHeadings(md = "") {
+  // Labels we want to treat as headings (case-insensitive)
+  const labels = [
+    "Passive summary","Summary","Details","Security","Comfort",
+    "Energy","Anomalies","Presence","Occupancy","Actions to take","Actions","Next steps"
+  ];
+  const group = labels.map(_escapeRe).join("|");
+
+  // Normalize newlines
+  md = String(md).replace(/\r\n/g, "\n");
+
+  // Convert lines that are *just* a label (optionally bold/with colon) into ### headings
+  // Examples matched: "Security", "**Security**", "Actions to take:", "__Energy__  "
+  const re = new RegExp(
+    `^\\s*(?:\\*\\*|__)?\\s*(${group})\\s*(?:\\*\\*|__)?\\s*:?\\s*$`,
+    "gmi"
+  );
+  md = md.replace(re, (_, lbl) => `### ${lbl}`);
+
+  // Collapse excessive blank lines
+  md = md.replace(/\n{3,}/g, "\n\n");
+  return md;
+}
 
 function pillFor(title = "") {
   const c = canonicalizeTitle(title);
@@ -271,8 +296,10 @@ function categoryClass(title = "") {
 // Split markdown into sections grouped by headings (h1–h4)
 function splitSections(markdown = "") {
   let tokens = [];
-  try { tokens = (window.marked && marked.lexer) ? marked.lexer(markdown) : []; }
-  catch { tokens = []; }
+  try {
+    const prepped = coerceHeadings(markdown);
+    tokens = (window.marked && marked.lexer) ? marked.lexer(prepped) : [];
+  } catch { tokens = []; }
 
   const sections = [];
   let cur = { title: null, bodyTokens: [] };
