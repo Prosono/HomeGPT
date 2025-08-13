@@ -26,6 +26,7 @@ from typing import Iterable
 from datetime import datetime, timezone
 from statistics import mean
 from typing import Any
+import re
 
 import yaml
 from fastapi import FastAPI, Query, Body
@@ -40,6 +41,21 @@ from homegpt.app.topology import (
     pack_states_for_prompt,
     pack_history_for_prompt,
 )
+
+_NOISE_LINES = re.compile(
+    r"^(\s*"
+    r"(SMARTi Dashboard.*|SMARTi Has .*|category_\d+_.*:|available_power_sensors_part\d+:|"
+    r"Home Assistant .*: \d+ .*|Vetle's device Climate React:.*|"
+    r"Average .*: unavailable.*|.*Missing Title:.*|.*Missing Subtitle:.*)"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+TOPO_MAX_CHARS    = 4000   # ≈1000 tokens
+STATE_MAX_CHARS   = 6000   # ≈1500 tokens
+HISTORY_MAX_CHARS = 9000   # ≈2250 tokens
+EVENTS_MAX_CHARS  = 3000   # ≈ 750 tokens
+TOTAL_MAX_CHARS   = 26000  # ≈6500 tokens (final guardrail for the whole user prompt)
 
 # ---------- History Compressor (signal-preserving) ----------
 
@@ -279,6 +295,52 @@ async def _fetch_history_all_entities(
 
 
 ##----------- COMPRESION start ---------------------------
+
+def strip_noise(text: str) -> str:
+    """Drop lines that are UI/config spam and blank lines."""
+    out = []
+    for line in (text or "").splitlines():
+        if not line.strip():
+            continue
+        if _NOISE_LINES.match(line):
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+def clamp_chars(text: str, max_chars: int) -> str:
+    """Trim on line boundaries to max_chars and annotate if truncated."""
+    t = text or ""
+    if len(t) <= max_chars:
+        return t
+    used = 0
+    out: list[str] = []
+    for line in t.splitlines():
+        ln = len(line) + 1
+        if used + ln > max_chars:
+            break
+        out.append(line)
+        used += ln
+    out.append("… [truncated]")
+    return "\n".join(out)
+
+def compose_user_prompt(*, lang: str, hours: int | None, topo: str, state_block: str, history_block: str, events_block: str = "") -> str:
+    topo          = clamp_chars(strip_noise(topo), TOPO_MAX_CHARS)
+    state_block   = clamp_chars(strip_noise(state_block), STATE_MAX_CHARS)
+    history_block = clamp_chars(history_block, HISTORY_MAX_CHARS)
+    events_block  = clamp_chars(events_block, EVENTS_MAX_CHARS) if events_block else ""
+
+    header = (
+        f"Language: {lang}.\n"
+        "First, topology; then CURRENT STATE; then compressed history"
+        + ("; then recent events" if events_block else "")
+        + ". Use CURRENT STATE as ground truth (avoid guessing).\n\n"
+    )
+
+    body = f"{topo}\n\n{state_block}\n\n{history_block}\n\n"
+    if events_block:
+        body += "EVENTS:\n" + events_block
+
+    return clamp_chars(header + body, TOTAL_MAX_CHARS)
 
 def _parse_iso_aware(s: str) -> datetime:
     # HA returns ISO like '2025-08-11T06:23:10+00:00' or without tz.
@@ -566,16 +628,13 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                     events_block = "\n".join(bullets) if bullets else "(none)"
 
                     # ----- Compose user message -----
-                    user = (
-                        f"Language: {cfg.get('language', 'en')}.\n"
-                        "First, a compact topology snapshot; then the CURRENT STATE for all entities; "
-                        f"then a compressed history for the last {cfg_hours} hours; "
-                        "then the raw recent events (newest last). "
-                        "Treat CURRENT STATE as ground truth (avoid guessing).\n\n"
-                        f"{topo}\n\n"
-                        f"{state_block}\n\n"
-                        f"{history_block}\n\n"
-                        "EVENTS:\n" + events_block
+                    user = compose_user_prompt(
+                        lang=cfg.get("language", "en"),
+                        hours=cfg_hours,
+                        topo=topo,
+                        state_block=state_block,
+                        history_block=history_block,
+                        events_block=events_block,
                     )
 
                     summary = gpt.complete_text(SYSTEM_PASSIVE, user)
@@ -666,14 +725,14 @@ async def run_history(hours: int = Query(..., ge=1, le=48)):
                     history_block = "(history unavailable)"
 
                 # Compose prompt (no recent EVENT_BUFFER here by design)
-                user = (
-                    f"Language: {cfg.get('language', 'en')}.\n"
-                    "First, topology; then CURRENT STATE; then a compressed multi-entity history block from the "
-                    f"last {hours} hours. Use CURRENT STATE as ground truth (avoid guessing).\n\n"
-                    f"{topo}\n\n"
-                    f"{state_block}\n\n"
-                    f"{history_block}\n\n"
+                user = compose_user_prompt(
+                    lang=cfg.get("language", "en"),
+                    hours=hours,
+                    topo=topo,
+                    state_block=state_block,
+                    history_block=history_block,
                 )
+
 
                 summary = gpt.complete_text(SYSTEM_PASSIVE, user)
                 actions: list = []
@@ -820,14 +879,13 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                     events_block = "\n".join(bullets) if bullets else "(none)"
 
                     # 6) Compose prompt
-                    user = (
-                        f"Language: {cfg.get('language', 'en')}.\n"
-                        "First, topology; then CURRENT STATE; then compressed history; then recent events. "
-                        "Use CURRENT STATE as ground truth (avoid guessing).\n\n"
-                        f"{topo}\n\n"
-                        f"{state_block}\n\n"
-                        f"{history_block}\n\n"
-                        "EVENTS:\n" + events_block
+                    user = compose_user_prompt(
+                        lang=cfg.get("language", "en"),
+                        hours=cfg_hours,
+                        topo=topo,
+                        state_block=state_block,
+                        history_block=history_block,
+                        events_block=events_block,
                     )
 
                     # 7) Call the text model
