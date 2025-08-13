@@ -65,8 +65,18 @@ FALSE_STATES = {"off", "closed", "locked", "clear", "no_motion", "away", "not_ho
 # ---------------- Global Event Buffer ----------------
 EVENT_BUFFER: list[dict] = []
 EVENT_BUFFER_MAX = 20000
-AUTO_ANALYSIS_EVENT_THRESHOLD = 10000       # auto-run when we reach 2k events
+AUTO_ANALYSIS_EVENT_THRESHOLD = 8000       # auto-run when we reach 8k events
 AUTO_ANALYSIS_MIN_INTERVAL_SEC = 15 * 60   # debounce auto-runs (15 min)
+
+# --- Prompt size pressure tracking (for pre-emptive auto analysis) ---
+EVENT_BYTES: int = 0                  # approx char budget for "EVENTS:" bullets
+EVENT_UNIQUE_IDS: set[str] = set()    # unique entities seen since last snapshot
+
+# Soft ceilings to trigger auto-run early (tweak to taste or move to config)
+EVENTS_TRIGGER_CHARS   = int(EVENTS_MAX_CHARS * 0.75)  # e.g. ~2250 chars
+EVENTS_TRIGGER_UNIQUE  = 80                            # ~80 distinct entities
+AUTO_SIZE_MIN_INTERVAL_SEC = 10 * 60                   # 10 min debounce (size-based)
+
 
 # History packing defaults (prompt-balance knobs)
 DEFAULT_HISTORY_HOURS = 6         # how many hours back to fetch from /history/period
@@ -547,8 +557,12 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
             if mode == "passive":
                 # Snapshot & clear events atomically
                 async with EVENT_LOCK:
+                    global EVENT_BYTES, EVENT_UNIQUE_IDS
                     events = EVENT_BUFFER[-EVENT_BUFFER_MAX:]
                     EVENT_BUFFER.clear()
+                    EVENT_BYTES = 0
+                    EVENT_UNIQUE_IDS.clear()
+
 
                 if not events:
                     summary = "No notable events recorded."
@@ -801,8 +815,11 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                 if mode == "passive":
                     # 1) Snapshot & clear atomically (limit to last 2000 events for UI-sized runs)
                     async with EVENT_LOCK:
+                        global EVENT_BYTES, EVENT_UNIQUE_IDS
                         events = EVENT_BUFFER[-2000:]
                         EVENT_BUFFER.clear()
+                        EVENT_BYTES = 0
+                        EVENT_UNIQUE_IDS.clear()
 
                     # 2) Topology
                     topo = await fetch_topology_snapshot(ha, max_lines=TOPO_MAX_LINES)
@@ -1041,23 +1058,43 @@ async def ha_event_listener():
                         "to": evt["data"]["new_state"]["state"] if evt["data"]["new_state"] else None,
                     }
                     async with EVENT_LOCK:
+                        global EVENT_BYTES, EVENT_UNIQUE_IDS
                         EVENT_BUFFER.append(data)
                         if len(EVENT_BUFFER) > EVENT_BUFFER_MAX:
-                            # bulk drop oldest
                             del EVENT_BUFFER[: len(EVENT_BUFFER) - EVENT_BUFFER_MAX]
 
-                        # Check auto-trigger conditions
-                        should_trigger = len(EVENT_BUFFER) >= AUTO_ANALYSIS_EVENT_THRESHOLD
-                        now = asyncio.get_event_loop().time()
-                        global _last_auto_run_ts
-                        recent_enough = (_last_auto_run_ts is None) or (
-                            (now - _last_auto_run_ts) >= AUTO_ANALYSIS_MIN_INTERVAL_SEC
+                        # --- size pressure accounting (very cheap) ---
+                        eid = data.get("entity_id") or ""
+                        oldv = str(data.get("from") or "")
+                        newv = str(data.get("to") or "")
+                        # approximate length of the bullet line we will render later
+                        approx_len = 32 + len(eid) + len(oldv) + len(newv)  # timestamp+separators ~= 32
+                        EVENT_BYTES += approx_len
+                        if eid:
+                            EVENT_UNIQUE_IDS.add(eid)
+
+                        # --- classic event-count trigger ---
+                        count_pressure = len(EVENT_BUFFER) >= AUTO_ANALYSIS_EVENT_THRESHOLD
+
+                        # --- size pressure trigger (fires earlier than count) ---
+                        size_pressure = (
+                            EVENT_BYTES >= EVENTS_TRIGGER_CHARS
+                            or len(EVENT_UNIQUE_IDS) >= EVENTS_TRIGGER_UNIQUE
                         )
+
+                        # debounce + “not already analyzing”
+                        now_mono = asyncio.get_event_loop().time()
+                        global _last_auto_run_ts
+                        # choose the right cool-down: size pressure can be a bit more frequent
+                        last_ts = _last_auto_run_ts or 0.0
+                        recent_enough_count = (now_mono - last_ts) >= AUTO_ANALYSIS_MIN_INTERVAL_SEC
+                        recent_enough_size  = (now_mono - last_ts) >= AUTO_SIZE_MIN_INTERVAL_SEC
                         idle = not _analysis_in_progress.is_set()
 
-                    if should_trigger and recent_enough and idle:
-                        # fire and forget (don’t block the event loop)
-                        asyncio.create_task(_auto_trigger())
+                    # Decide reason & fire (don’t block the event loop)
+                    if idle and ((size_pressure and recent_enough_size) or (count_pressure and recent_enough_count)):
+                        reason = "Auto (size pressure)" if size_pressure else "Auto (event threshold)"
+                        asyncio.create_task(_auto_trigger(reason))
 
                 except Exception as ex:
                     logger.exception(f"Error processing event: {ex}")
@@ -1066,21 +1103,20 @@ async def ha_event_listener():
             await asyncio.sleep(5)
 
 
-async def _auto_trigger():
-    # debounce + mark running
+async def _auto_trigger(reason: str = "auto"):
     _analysis_in_progress.set()
     try:
         cfg = _load_config()
         mode = cfg.get("mode", "passive").lower()
-        result = await _perform_analysis(mode, focus="Auto (event threshold)", trigger="auto")
-        # success → update timestamp
+        result = await _perform_analysis(mode, focus=reason, trigger="auto")
         global _last_auto_run_ts
         _last_auto_run_ts = asyncio.get_event_loop().time()
-        logger.info("Auto analysis stored row=%s", result.get("row"))
+        logger.info("Auto analysis stored row=%s (%s)", result.get("row"), reason)
     except Exception as e:
         logger.exception("Auto analysis failed: %s", e)
     finally:
         _analysis_in_progress.clear()
+
 
 
 @app.on_event("startup")
