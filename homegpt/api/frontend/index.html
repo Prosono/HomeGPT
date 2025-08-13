@@ -118,7 +118,13 @@
       <div class="card modal-panel rounded-xl shadow-2xl p-6 relative w-full max-w-5xl">
         <button id="modalClose" class="absolute top-3 right-3 text-gray-300 hover:text-white text-xl leading-none" aria-label="Close dialog">✕</button>
 
-        <!-- Modal hero -->
+        <!-- These IDs match your legacy app.js expectations -->
+        <div class="space-y-2 mb-4">
+          <h2 id="title" class="text-2xl font-bold text-indigo-300">Analysis</h2>
+          <div id="meta" class="text-sm text-gray-400"></div>
+        </div>
+
+        <!-- Optional hero (purely decorative) -->
         <div class="modal-hero mb-6">
           <div class="hero-head">
             <i class="mdi mdi-home-analytics"></i>
@@ -127,7 +133,7 @@
           <div class="hero-body" id="modalIntro">Latest insights for your home.</div>
         </div>
 
-        <!-- Category layout (optional upgrade) -->
+        <!-- Category layout (can be filled later if you extend app.js) -->
         <div class="modal-masonry hidden" id="modalMasonry">
           <section class="modal-section theme-security">
             <h3><i class="mdi mdi-shield-home-outline"></i>Security</h3>
@@ -156,8 +162,8 @@
           </section>
         </div>
 
-        <!-- Fallback/legacy summary (kept for compatibility with current app.js) -->
-        <div id="modalSummary" class="prose prose-invert max-w-none whitespace-pre-wrap leading-relaxed"></div>
+        <!-- Legacy summary target (this is what your JS writes into) -->
+        <div id="summary" class="prose prose-invert max-w-none whitespace-pre-wrap leading-relaxed"></div>
       </div>
     </div>
   </div>
