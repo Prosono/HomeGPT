@@ -23,6 +23,9 @@ import logging
 from pathlib import Path
 import math
 from typing import Iterable
+from datetime import datetime, timezone
+from statistics import mean
+from typing import Any
 
 import yaml
 from fastapi import FastAPI, Query, Body
@@ -38,6 +41,10 @@ from homegpt.app.topology import (
     pack_history_for_prompt,
 )
 
+# ---------- History Compressor (signal-preserving) ----------
+
+TRUE_STATES = {"on", "open", "unlocked", "detected", "motion", "home", "present"}
+FALSE_STATES = {"off", "closed", "locked", "clear", "no_motion", "away", "not_home"}
 
 # ---------------- Global Event Buffer ----------------
 EVENT_BUFFER: list[dict] = []
@@ -271,6 +278,200 @@ async def _fetch_history_all_entities(
     return combined
 
 
+##----------- COMPRESION start ---------------------------
+
+def _parse_iso_aware(s: str) -> datetime:
+    # HA returns ISO like '2025-08-11T06:23:10+00:00' or without tz.
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        return datetime.now(timezone.utc)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+def _try_float(x: Any) -> float | None:
+    if x is None:
+        return None
+    try:
+        return float(str(x).replace(",", "."))
+    except Exception:
+        return None
+
+def _domain_of(eid: str) -> str:
+    return eid.split(".", 1)[0] if "." in eid else ""
+
+def _is_true_state(s: str) -> bool | None:
+    lc = str(s).strip().lower()
+    if lc in TRUE_STATES:
+        return True
+    if lc in FALSE_STATES:
+        return False
+    return None
+
+def _format_pct(p: float) -> str:
+    return f"{p:.0f}%"
+
+def _sec_hm(sec: float) -> str:
+    sec = max(0, int(sec))
+    h, r = divmod(sec, 3600)
+    m, _ = divmod(r, 60)
+    if h >= 1:
+        return f"{h}h {m}m"
+    return f"{m}m"
+
+def _compress_entity_series(series: list[dict], now: datetime, jitter_sec: int = 90) -> tuple[str, float]:
+    """
+    Returns (one_line_summary, activity_score).
+    'activity_score' is used to rank entities globally.
+    """
+    if not series:
+        return ("", 0.0)
+
+    eid = series[0].get("entity_id", "unknown.unknown")
+    domain = _domain_of(eid)
+
+    # Extract (ts, state, attrs) sorted, and coalesce jitter
+    rows = []
+    for row in series:
+        st = row.get("state")
+        ts = _parse_iso_aware(row.get("last_changed") or row.get("last_updated") or row.get("time_fired", ""))
+        rows.append((ts, st, row.get("attributes", {})))
+    rows.sort(key=lambda x: x[0])
+
+    # Coalesce successive changes within jitter_sec to reduce noise
+    coalesced: list[tuple[datetime, Any, dict]] = []
+    for ts, st, attr in rows:
+        if coalesced and (ts - coalesced[-1][0]).total_seconds() <= jitter_sec:
+            # overwrite last state if within jitter window
+            coalesced[-1] = (ts, st, attr)
+        else:
+            coalesced.append((ts, st, attr))
+    rows = coalesced
+
+    # Current/last
+    last_ts, last_state, last_attr = rows[-1]
+    last_state_str = str(last_state)
+
+    # Attempt numeric path
+    vals: list[float] = []
+    for _, st, _ in rows:
+        v = _try_float(st)
+        if v is not None and str(st).lower() not in {"unknown", "unavailable"}:
+            vals.append(v)
+
+    # Choose path based on domain/values
+    line = ""
+    activity = 0.0
+
+    # Binary-ish?
+    t_flags = [(_is_true_state(st), ts) for ts, st, _ in rows]
+    if any(tf is not None for tf, _ in t_flags) and domain in {"binary_sensor", "lock", "cover", "switch"}:
+        # Compute %true and longest true streak
+        true_dur = 0.0
+        longest_true = 0.0
+        last_t = rows[0][0]
+        prev_true = t_flags[0][0]
+        for (tf, ts), nxt in zip(t_flags, t_flags[1:] + [(None, now)]):
+            # duration until next timestamp (or now)
+            nxt_ts = nxt[1] if nxt[1] is not None else now
+            dur = (nxt_ts - ts).total_seconds()
+            if tf is True:
+                true_dur += max(0.0, dur)
+                longest_true = max(longest_true, max(0.0, dur))
+        total = (now - rows[0][0]).total_seconds() or 1.0
+        pct = true_dur / total
+        last_change_ago = _sec_hm((now - last_ts).total_seconds())
+
+        pretty_state = last_state_str.upper()
+        if domain == "lock":
+            pretty_state = "UNLOCKED" if _is_true_state(last_state_str) else "LOCKED"
+        elif domain == "cover":
+            # Many covers are numeric; if not, treat open/closed
+            pretty_state = "OPEN" if _is_true_state(last_state_str) else "CLOSED"
+        elif domain == "binary_sensor":
+            # device_class could refine, but keep generic
+            pretty_state = "ON" if _is_true_state(last_state_str) else "OFF"
+
+        line = f"- {eid}: {pretty_state} (true {_format_pct(pct)}, longest {_sec_hm(longest_true)}, last change {last_change_ago} ago)"
+        # Activity: number of effective changes per hour
+        activity = max(1.0, len(rows) / max(1.0, (now - rows[0][0]).total_seconds() / 3600.0))
+        return (line, activity)
+
+    # Numeric path
+    if len(vals) >= 2:
+        v_now = _try_float(last_state_str)
+        v_min = min(vals)
+        v_max = max(vals)
+        v_mean = mean(vals)
+        # count “meaningful” jumps (> 10% of range or absolute 1 unit)
+        rng = max(1e-9, v_max - v_min)
+        jumps = 0
+        prev = vals[0]
+        for v in vals[1:]:
+            if abs(v - prev) >= max(1.0, 0.10 * rng):
+                jumps += 1
+            prev = v
+
+        unit = last_attr.get("unit_of_measurement") or ""
+        # Energy-ish monotonic delta
+        delta_txt = ""
+        if "kwh" in unit.lower() or "wh" in unit.lower() or "energy" in eid:
+            # approximate delta if monotonic increasing
+            delta = vals[-1] - vals[0]
+            if abs(delta) > 1e-6:
+                delta_txt = f", Δ {delta:.2f}{unit}"
+
+        now_txt = f"{v_now:.2f}{unit}" if v_now is not None else last_state_str
+        line = (f"- {eid}: now {now_txt}, min {v_min:.2f}{unit}, max {v_max:.2f}{unit}, "
+                f"avg {v_mean:.2f}{unit}, changes {jumps}{delta_txt}")
+        activity = max(1.0, jumps)
+        return (line, activity)
+
+    # Fallback categorical / texty
+    line = f"- {eid}: state={last_state_str} (last change {_sec_hm((now - last_ts).total_seconds())} ago)"
+    activity = max(1.0, len(rows) / max(1.0, (now - rows[0][0]).total_seconds() / 3600.0))
+    return (line, activity)
+
+
+def compress_history_for_prompt(hist: list, *, now: datetime | None = None,
+                                max_lines: int = 160, jitter_sec: int = 90) -> str:
+    """
+    Convert HA history (list per entity) into <= max_lines bullet lines,
+    ranked by “activity” so we preserve the most informative entities.
+    """
+    if not hist:
+        return "(no history available)"
+
+    now = now or datetime.now(timezone.utc)
+    lines: list[tuple[str, float]] = []
+
+    for series in hist:
+        if not isinstance(series, list) or not series:
+            continue
+        # Skip unavailable-only series quickly
+        if all((str(r.get("state")).lower() in {"unknown", "unavailable", "none"}) for r in series):
+            continue
+        try:
+            line, score = _compress_entity_series(series, now, jitter_sec=jitter_sec)
+            if line:
+                lines.append((line, score))
+        except Exception:
+            # Defensive: never kill the run due to one entity
+            continue
+
+    if not lines:
+        return "(history had no usable states)"
+
+    # Rank by score (desc) and take top max_lines
+    lines.sort(key=lambda x: x[1], reverse=True)
+    kept = lines[:max_lines]
+    body = "\n".join(l for (l, _) in kept)
+
+    return "HISTORY (compressed):\n" + body
+
+##----------- COMPRESION END ---------------------------
+
 async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
     """Shared analysis worker used by manual and auto triggers."""
     cfg = _load_config()
@@ -347,7 +548,12 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
 
                     # ✅ always set history_block
                     try:
-                        history_block = pack_history_for_prompt(hist, max_lines=HISTORY_MAX_LINES)
+                        history_block = compress_history_for_prompt(
+                            hist,
+                            now=datetime.now(timezone.utc),
+                            max_lines=int(_load_config().get("history_max_lines", HISTORY_MAX_LINES)),
+                            jitter_sec=int(_load_config().get("history_jitter_sec", 90)),
+                        )
                     except Exception as e:
                         logger.warning("History pack failed: %s", e)
                         history_block = "(history unavailable)"
@@ -449,7 +655,12 @@ async def run_history(hours: int = Query(..., ge=1, le=48)):
 
                 # Pack
                 try:
-                    history_block = pack_history_for_prompt(hist, max_lines=HISTORY_MAX_LINES)
+                    history_block = compress_history_for_prompt(
+                        hist,
+                        now=datetime.now(timezone.utc),
+                        max_lines=int(_load_config().get("history_max_lines", HISTORY_MAX_LINES)),
+                        jitter_sec=int(_load_config().get("history_jitter_sec", 90)),
+                    )
                 except Exception as e:
                     logger.warning("History pack failed: %s", e)
                     history_block = "(history unavailable)"
@@ -591,7 +802,12 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
 
                     # ✅ always set history_block
                     try:
-                        history_block = pack_history_for_prompt(hist, max_lines=HISTORY_MAX_LINES)
+                        history_block = compress_history_for_prompt(
+                            hist,
+                            now=datetime.now(timezone.utc),
+                            max_lines=int(_load_config().get("history_max_lines", HISTORY_MAX_LINES)),
+                            jitter_sec=int(_load_config().get("history_jitter_sec", 90)),
+                        )
                     except Exception as e:
                         logger.warning("History pack failed: %s", e)
                         history_block = "(history unavailable)"
