@@ -177,15 +177,13 @@ class OpenAIClient:
                         logger.warning("Still empty; falling back to gpt-4o-mini for this request.")
                         # Swap model & token param for fallback
                         self.model = "gpt-4o-mini"
+                        kwargs["model"] = self.model
                         for k in ("max_tokens", "max_completion_tokens"):
                             kwargs.pop(k, None)
                         self._token_param_name = _token_param_for_model(self.model)
-                        kwargs["model"] = self.model
                         kwargs[self._token_param_name] = self.max_output_tokens
-                        # Keep temperature omitted unless user configured it; gpt-4o-mini supports it
-                        # If you want 0.2 by default on fallback, uncomment:
-                        # if "temperature" not in kwargs:
-                        #     kwargs["temperature"] = 0.2
+                        # Keep temperature omitted unless explicitly set; 4o-mini supports it,
+                        # but it's fine to leave out.
                         r = self._client.chat.completions.create(**kwargs)
                         msg = r.choices[0].message
                         text = (msg.content or "").strip()
@@ -226,4 +224,61 @@ class OpenAIClient:
                         logger.warning("Server rejected max_tokens; switching to max_completion_tokens.")
                         kwargs.pop("max_tokens", None)
                         kwargs["max_completion_tokens"] = self.max_output_tokens
-                        self._token_param_name = "_
+                        self._token_param_name = "max_completion_tokens"
+                        if attempt < self.max_retries:
+                            time.sleep(0.25); continue
+                    if "max_completion_tokens" in body_str and self._token_param_name == "max_completion_tokens":
+                        logger.warning("Server rejected max_completion_tokens; switching to max_tokens.")
+                        kwargs.pop("max_completion_tokens", None)
+                        kwargs["max_tokens"] = self.max_output_tokens
+                        self._token_param_name = "max_tokens"
+                        if attempt < self.max_retries:
+                            time.sleep(0.25); continue
+
+                # Temperature not supported → drop it once
+                if "temperature" in msg or "temperature" in body_str:
+                    if "temperature" in kwargs:
+                        logger.warning("Temperature not supported by model %s; omitting and retrying.", self.model)
+                        kwargs.pop("temperature", None)
+                        self.temperature = None
+                        if attempt < self.max_retries:
+                            time.sleep(0.25); continue
+
+                # response_format not supported → remove and retry
+                if "response_format" in msg or "response_format" in body_str:
+                    if "response_format" in kwargs:
+                        logger.warning("response_format not supported; removing and retrying.")
+                        kwargs.pop("response_format", None)
+                        if attempt < self.max_retries:
+                            time.sleep(0.25); continue
+
+                logger.error("OpenAI client error: %s", e)
+                raise
+
+            except NotFoundError as e:
+                logger.error("Model not found or not accessible: %s", e)
+                raise
+
+            except AuthenticationError as e:
+                logger.error("OpenAI auth error: %s", e)
+                raise
+
+            except OpenAIError as e:
+                last_err = e
+                logger.warning("OpenAIError: %s (attempt %d/%d)", e, attempt + 1, self.max_retries)
+                if attempt < self.max_retries:
+                    time.sleep(1.0 + 0.25 * attempt)
+                    continue
+                break
+
+            except Exception as e:
+                last_err = e
+                logger.exception("Unexpected error calling OpenAI")
+                if attempt < self.max_retries:
+                    time.sleep(1.0 + 0.25 * attempt)
+                    continue
+                break
+
+        if last_err:
+            raise last_err
+        return {}
