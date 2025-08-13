@@ -38,6 +38,8 @@ const prog = {
     }
   },
 
+  
+
   startIdle() {
     // cancel any previous animation
     this.stop(false);

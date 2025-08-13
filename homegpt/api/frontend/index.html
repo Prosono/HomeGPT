@@ -1,112 +1,168 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, viewport-fit=cover"
+  />
   <title>SMARTi Spectra</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-  <link rel="stylesheet" href="https://cdn.materialdesignicons.com/7.2.96/css/materialdesignicons.min.css">
-  <link rel="stylesheet" href="static/style.css">
-</head>
-<body class="bg-gray-900 text-gray-200 font-sans">
-    
-<!-- Animated background (aurora blobs) -->
-<div class="aurora" aria-hidden="true">
-  <span class="blob b1"></span>
-  <span class="blob b2"></span>
-  <span class="blob b3"></span>
-  <span class="blob b4"></span>
-  <span class="blob b5"></span>
-</div>
 
-  <div class="max-w-6xl mx-auto p-6">
+  <!-- Preconnects for faster CDNs -->
+  <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+
+  <!-- UI libs -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+  <link rel="stylesheet" href="https://cdn.materialdesignicons.com/7.2.96/css/materialdesignicons.min.css">
+
+  <!-- App styles -->
+  <link rel="stylesheet" href="static/style.css" />
+</head>
+<body class="bg-gray-900 text-gray-200 font-sans antialiased selection:bg-indigo-600/30 selection:text-white">
+  
+  <!-- Animated background (aurora blobs) -->
+  <div class="aurora" aria-hidden="true">
+    <span class="blob b1"></span>
+    <span class="blob b2"></span>
+    <span class="blob b3"></span>
+    <span class="blob b4"></span>
+    <span class="blob b5"></span>
+  </div>
+
+  <main class="max-w-6xl mx-auto p-6">
     <div class="card rounded-xl shadow-xl p-8">
       <!-- Header with logo + wordmark -->
-        <header class="mb-8">
-          <a href="/" class="flex items-center justify-center gap-3 select-none" aria-label="Spectra Home">
-            <picture>
-              <source srcset="static/spectra-logo-dark.png" media="(prefers-color-scheme: dark)">
-              <img src="static/spectra-logo-light.png" alt="Spectra logo" class="h-12 w-auto" height="68">
-            </picture>
-          </a>
-          <p class="mt-2 text-center text-sm text-gray-400">Smart Living, Simplified</p>
-        </header>
+      <header class="mb-8">
+        <a href="/" class="flex items-center justify-center gap-3 select-none" aria-label="Spectra Home">
+          <picture>
+            <source srcset="static/spectra-logo-dark.png" media="(prefers-color-scheme: dark)" />
+            <img
+              src="static/spectra-logo-light.png"
+              alt="Spectra logo"
+              class="h-12 w-auto"
+              width="160"
+              height="48"
+              decoding="async"
+            />
+          </picture>
+        </a>
+        <p class="mt-2 text-center text-sm text-gray-400">Smart Living, Simplified</p>
+      </header>
 
-        <button id="btn-analyze-history"
-          class="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white rounded-lg shadow-md transition-colors">
-          Analyse history
-        </button>
-
-
-        <dialog id="dlg-history">
-          <form method="dialog" style="min-width:280px">
-            <h3>Select time range</h3>
-            <div id="history-options" style="display:flex; gap:8px; flex-wrap:wrap; margin:12px 0">
-              <!-- buttons injected by JS -->
-            </div>
-            <div style="text-align:right">
-              <button value="cancel">Cancel</button>
-            </div>
-          </form>
-        </dialog>
-        
-        <style>
-          .btn { padding:8px 12px; border-radius:8px; border:1px solid #ccc; cursor:pointer; }
-          .opt { padding:6px 10px; border-radius:6px; border:1px solid #999; cursor:pointer; }
-        </style>
-
-      <!-- Controls -->
+      <!-- Top controls bar -->
       <div class="flex flex-wrap items-center justify-between mb-6 gap-4">
-        <div class="flex items-center">
-          <span class="mr-4 font-semibold text-lg">Mode:</span>
-          <button id="toggleMode" class="px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white rounded-lg shadow-md transition-colors">
-            Loading...
+        <div class="flex items-center gap-3">
+          <button id="toggleMode" class="btn btn-ghost" aria-live="polite">
+            <i class="mdi mdi-robot"></i>
+            <span>Mode: <span id="modeName">Loading…</span></span>
+          </button>
+          <span class="chip" aria-live="polite">
+            <i class="mdi mdi-cpu-64-bit"></i>
+            <span id="modelName">Model</span>
+          </span>
+        </div>
+
+        <div class="flex-1"></div>
+
+        <div class="flex items-center gap-3 text-sm sm:text-base">
+          <span class="chip" aria-live="polite">
+            <i class="mdi mdi-bell-outline"></i><span id="eventCount">0 events</span>
+          </span>
+          <span class="chip" aria-live="polite">
+            <i class="mdi mdi-clock-outline"></i><span id="sinceLast">—</span>
+          </span>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <button id="btn-analyze-history" class="btn btn-ghost">
+            <i class="mdi mdi-history"></i>Analyse history
+          </button>
+          <button id="runAnalysis" class="btn">
+            <i class="mdi mdi-play"></i>Start New Analysis
           </button>
         </div>
-
-        <div class="flex-1 hidden sm:block"></div>
-
-        <div class="text-sm sm:text-base text-gray-300 flex items-center gap-6">
-          <p id="eventCount"></p>
-          <p id="sinceLast"></p>
-        </div>
-
-        <button id="runAnalysis" class="px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white rounded-lg shadow-md transition-colors">
-          Start New Analysis
-        </button>
       </div>
+
+      <!-- History range dialog -->
+      <dialog id="dlg-history" class="card rounded-xl p-6 text-gray-200">
+        <form method="dialog">
+          <h3 class="text-lg font-extrabold mb-3">Select time range</h3>
+          <div id="history-options" class="flex flex-wrap gap-2 mb-4"><!-- buttons injected by JS --></div>
+          <div class="text-right">
+            <button value="cancel" class="btn btn-ghost">
+              <i class="mdi mdi-close"></i>Cancel
+            </button>
+          </div>
+        </form>
+      </dialog>
 
       <!-- Progress bar -->
       <div class="mb-6">
-        <div class="w-full bg-gray-700 h-3 rounded-full overflow-hidden">
+        <div class="w-full bg-gray-700/70 h-3 rounded-full overflow-hidden">
           <div id="progressBar" class="bg-gradient-to-r from-purple-500 to-pink-500 h-3 rounded-full transition-all duration-500" style="width:0%"></div>
         </div>
       </div>
 
-      <!-- Analysis buttons grid -->
+      <!-- Analyses grid -->
       <div id="analysisGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
     </div>
-  </div>
+  </main>
 
   <!-- Modal overlay -->
   <div id="detailsOverlay" class="fixed inset-0 z-50 hidden">
     <div id="overlayBackdrop" class="absolute inset-0 bg-black/60"></div>
     <div class="absolute inset-0 flex items-center justify-center p-4">
-      <div class="card modal-panel rounded-xl shadow-2xl p-6 relative">
-        <button id="modalClose" class="absolute top-3 right-3 text-gray-300 hover:text-white text-xl leading-none">✕</button>
-        <div class="space-y-2 mb-4">
-          <h2 id="modalTitle" class="text-2xl font-bold text-indigo-300">Analysis</h2>
-          <div id="modalMeta" class="text-sm text-gray-400"></div>
+      <div class="card modal-panel rounded-xl shadow-2xl p-6 relative w-full max-w-5xl">
+        <button id="modalClose" class="absolute top-3 right-3 text-gray-300 hover:text-white text-xl leading-none" aria-label="Close dialog">✕</button>
+
+        <!-- Modal hero -->
+        <div class="modal-hero mb-6">
+          <div class="hero-head">
+            <i class="mdi mdi-home-analytics"></i>
+            Daily Summary
+          </div>
+          <div class="hero-body" id="modalIntro">Latest insights for your home.</div>
         </div>
+
+        <!-- Category layout (optional upgrade) -->
+        <div class="modal-masonry hidden" id="modalMasonry">
+          <section class="modal-section theme-security">
+            <h3><i class="mdi mdi-shield-home-outline"></i>Security</h3>
+            <div class="section-body" id="secSecurity">Nothing to report.</div>
+          </section>
+
+          <section class="modal-section theme-comfort">
+            <h3><i class="mdi mdi-thermometer"></i>Comfort</h3>
+            <div class="section-body" id="secComfort">Nothing to report.</div>
+            <div class="section-chart"><canvas id="chartTemp"></canvas></div>
+          </section>
+
+          <section class="modal-section theme-energy">
+            <h3><i class="mdi mdi-flash"></i>Energy</h3>
+            <div class="section-body" id="secEnergy">Nothing to report.</div>
+          </section>
+
+          <section class="modal-section theme-anomalies">
+            <h3><i class="mdi mdi-alert-decagram-outline"></i>Anomalies</h3>
+            <div class="section-body" id="secAnomalies">Nothing to report.</div>
+          </section>
+
+          <section class="modal-section theme-reco">
+            <h3><i class="mdi mdi-lightbulb-on-outline"></i>Actions to take</h3>
+            <div class="section-body" id="secActions">Nothing to report.</div>
+          </section>
+        </div>
+
+        <!-- Fallback/legacy summary (kept for compatibility with current app.js) -->
         <div id="modalSummary" class="prose prose-invert max-w-none whitespace-pre-wrap leading-relaxed"></div>
       </div>
     </div>
   </div>
 
-
-
-  <script src="static/app.js" defer> </script>
+  <!-- App logic -->
+  <script src="static/app.js" defer></script>
 </body>
 </html>
- 
