@@ -2,10 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1, viewport-fit=cover"
-  />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>SMARTi Spectra</title>
 
   <!-- Preconnects for faster CDNs -->
@@ -22,7 +19,7 @@
   <link rel="stylesheet" href="static/style.css" />
 </head>
 <body class="bg-gray-900 text-gray-200 font-sans antialiased selection:bg-indigo-600/30 selection:text-white">
-  
+
   <!-- Animated background (aurora blobs) -->
   <div class="aurora" aria-hidden="true">
     <span class="blob b1"></span>
@@ -118,13 +115,17 @@
       <div class="card modal-panel rounded-xl shadow-2xl p-6 relative w-full max-w-5xl">
         <button id="modalClose" class="absolute top-3 right-3 text-gray-300 hover:text-white text-xl leading-none" aria-label="Close dialog">✕</button>
 
-        <!-- These IDs match your legacy app.js expectations -->
+        <!-- Visible title/meta -->
         <div class="space-y-2 mb-4">
-          <h2 id="title" class="text-2xl font-bold text-indigo-300">Analysis</h2>
-          <div id="meta" class="text-sm text-gray-400"></div>
+          <h2 id="modalTitle" class="text-2xl font-bold text-indigo-300">Analysis</h2>
+          <div id="modalMeta" class="text-sm text-gray-400"></div>
         </div>
 
-        <!-- Optional hero (purely decorative) -->
+        <!-- Hidden aliases so old code using #title/#meta keeps working -->
+        <h2 id="title" class="sr-only">Analysis</h2>
+        <div id="meta" class="sr-only"></div>
+
+        <!-- Optional hero -->
         <div class="modal-hero mb-6">
           <div class="hero-head">
             <i class="mdi mdi-home-analytics"></i>
@@ -133,7 +134,7 @@
           <div class="hero-body" id="modalIntro">Latest insights for your home.</div>
         </div>
 
-        <!-- Category layout (can be filled later if you extend app.js) -->
+        <!-- Category layout (optional; can be filled later) -->
         <div class="modal-masonry hidden" id="modalMasonry">
           <section class="modal-section theme-security">
             <h3><i class="mdi mdi-shield-home-outline"></i>Security</h3>
@@ -162,11 +163,42 @@
           </section>
         </div>
 
-        <!-- Legacy summary target (this is what your JS writes into) -->
-        <div id="summary" class="prose prose-invert max-w-none whitespace-pre-wrap leading-relaxed"></div>
+        <!-- Visible summary -->
+        <div id="modalSummary" class="prose prose-invert max-w-none whitespace-pre-wrap leading-relaxed"></div>
+        <!-- Hidden alias for legacy code -->
+        <div id="summary" class="sr-only"></div>
       </div>
     </div>
   </div>
+
+  <!-- Bridge: ensure legacy IDs exist & mirror content BOTH ways.
+       Placed BEFORE app.js so constants in app.js won't be null. -->
+  <script>
+    (function () {
+      function ensureAlias(primaryId, aliasId) {
+        const primary = document.getElementById(primaryId);
+        let alias = document.getElementById(aliasId);
+        if (!primary) return;
+        if (!alias) {
+          // create a hidden alias just before the primary
+          alias = primary.cloneNode(false);
+          alias.id = aliasId;
+          alias.classList.add('sr-only');
+          primary.parentNode.insertBefore(alias, primary);
+        }
+        // mirror both ways so whichever one code writes to, the other updates
+        const mirror = (src, dst) => { dst.innerHTML = src.innerHTML; };
+        const opts = { childList: true, subtree: true, characterData: true };
+        new MutationObserver(() => mirror(primary, alias)).observe(primary, opts);
+        new MutationObserver(() => mirror(alias, primary)).observe(alias, opts);
+      }
+      // Title & meta
+      ensureAlias('modalTitle', 'title');
+      ensureAlias('modalMeta',  'meta');
+      // Summary
+      ensureAlias('modalSummary', 'summary');
+    })();
+  </script>
 
   <!-- App logic -->
   <script src="static/app.js" defer></script>
