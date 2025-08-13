@@ -171,32 +171,40 @@
     </div>
   </div>
 
-  <!-- Bridge: ensure legacy IDs exist & mirror content BOTH ways.
-       Placed BEFORE app.js so constants in app.js won't be null. -->
+  <!-- Bridge: provide legacy IDs (#title/#meta/#summary) and
+     mirror their content ONE-WAY into the visible modal fields. -->
   <script>
     (function () {
-      function ensureAlias(primaryId, aliasId) {
+      function ensureAlias(aliasId, primaryId) {
         const primary = document.getElementById(primaryId);
-        let alias = document.getElementById(aliasId);
         if (!primary) return;
+
+        let alias = document.getElementById(aliasId);
         if (!alias) {
-          // create a hidden alias just before the primary
-          alias = primary.cloneNode(false);
+          // Create a hidden alias element so old code can write to it
+          alias = document.createElement(primary.tagName || 'div');
           alias.id = aliasId;
-          alias.classList.add('sr-only');
+          alias.className = 'sr-only';
+          // Put the alias just before the primary so queries still find it early
           primary.parentNode.insertBefore(alias, primary);
         }
-        // mirror both ways so whichever one code writes to, the other updates
-        const mirror = (src, dst) => { dst.innerHTML = src.innerHTML; };
-        const opts = { childList: true, subtree: true, characterData: true };
-        new MutationObserver(() => mirror(primary, alias)).observe(primary, opts);
-        new MutationObserver(() => mirror(alias, primary)).observe(alias, opts);
+
+        // ONE-WAY sync: whenever legacy alias changes, copy into the visible target
+        const sync = () => { primary.innerHTML = alias.innerHTML; };
+        new MutationObserver(sync).observe(alias, {
+          childList: true,
+          subtree: true,
+          characterData: true
+        });
+
+        // Initial sync in case alias already has content set imperatively
+        sync();
       }
-      // Title & meta
-      ensureAlias('modalTitle', 'title');
-      ensureAlias('modalMeta',  'meta');
-      // Summary
-      ensureAlias('modalSummary', 'summary');
+
+      // Map legacy IDs -> visible IDs
+      ensureAlias('title',   'modalTitle');
+      ensureAlias('meta',    'modalMeta');
+      ensureAlias('summary', 'modalSummary');
     })();
   </script>
 
