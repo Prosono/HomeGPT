@@ -71,7 +71,11 @@ class OpenAIClient:
         # Env-tunable defaults
         self.timeout = float(os.getenv("OPENAI_TIMEOUT", str(timeout if timeout is not None else 90.0)))
         self.max_retries = int(os.getenv("OPENAI_RETRIES", str(max_retries if max_retries is not None else 3)))
-        self.max_output_tokens = int(os.getenv("OPENAI_MAX_TOKENS", "500"))
+        # Increase default token budget for GPT‑5 models
+        if self.model.startswith("gpt-5"):
+            self.max_output_tokens = int(os.getenv("OPENAI_MAX_TOKENS", "5000"))
+        else:
+            self.max_output_tokens = int(os.getenv("OPENAI_MAX_TOKENS", "500"))
         self.enable_fallback = os.getenv("OPENAI_FALLBACK", "1") == "1"
 
         # Only include temperature for models that support it
