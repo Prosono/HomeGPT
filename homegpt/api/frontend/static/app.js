@@ -323,6 +323,98 @@ function splitSections(markdown = "") {
   return sections;
 }
 
+// Extract the first “kWh” and “W” value from a summary string
+function extractMetrics(summary = "") {
+  let energy = null, power = null;
+  const kwhMatch = summary.match(/([\d.]+)\s*kWh/i);
+  if (kwhMatch) energy = parseFloat(kwhMatch[1]);
+  const wattMatch = summary.match(/([\d.]+)\s*W\b/i);
+  if (wattMatch) power = parseFloat(wattMatch[1]);
+  return { energy, power };
+}
+
+async function loadHistory() {
+  let rows = await jsonFetch(api("history"));
+  if (!rows) rows = [];
+  const dataRows = Array.isArray(rows) ? rows : Object.values(rows);
+
+  renderGrid(dataRows); // existing cards
+
+  // --- NEW: Build data for the chart ---
+  const labels    = [];
+  const energyPts = [];
+  const powerPts  = [];
+  dataRows.forEach(row => {
+    const ts = row.ts || row[1];
+    const summary = row.summary || row[4];
+    const { energy, power } = extractMetrics(summary);
+    labels.push(new Date(ts).toLocaleString());
+    energyPts.push(energy);
+    powerPts.push(power);
+  });
+
+  renderTrendChart(labels, energyPts, powerPts);
+}
+
+function renderTrendChart(labels, energyData, powerData) {
+  const ctx = document.getElementById('analysisChart').getContext('2d');
+  // Destroy existing chart if present (to avoid overlaying old data)
+  if (window.analysisChart) window.analysisChart.destroy();
+  window.analysisChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Hourly energy usage (kWh)',
+          data: energyData,
+          borderColor: '#34d399', // emerald-400
+          backgroundColor: 'transparent',
+          tension: 0.3,
+          spanGaps: true
+        },
+        {
+          label: 'Current power draw (W)',
+          data: powerData,
+          borderColor: '#60a5fa', // blue-400
+          backgroundColor: 'transparent',
+          tension: 0.3,
+          spanGaps: true,
+          yAxisID: 'y2'
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        tooltip: { enabled: true },
+        legend: { position: 'top' }
+      },
+      scales: {
+        y: {
+          type: 'linear',
+          display: true,
+          position: 'left',
+          title: { display: true, text: 'kWh' },
+          beginAtZero: true
+        },
+        y2: {
+          type: 'linear',
+          display: true,
+          position: 'right',
+          title: { display: true, text: 'W' },
+          grid: { drawOnChartArea: false }
+        },
+        x: {
+          title: { display: true, text: 'Analysis timestamp' }
+        }
+      }
+    }
+  });
+}
+
+
 // Build preview data: pills, first points, and a numeric series (sparkline)
 function parsePreview(summary = "") {
   const sections = splitSections(summary);
