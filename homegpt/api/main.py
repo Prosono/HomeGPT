@@ -66,16 +66,16 @@ FALSE_STATES = {"off", "closed", "locked", "clear", "no_motion", "away", "not_ho
 EVENT_BUFFER: list[dict] = []
 EVENT_BUFFER_MAX = 20000
 AUTO_ANALYSIS_EVENT_THRESHOLD = 8000       # auto-run when we reach 8k events
-AUTO_ANALYSIS_MIN_INTERVAL_SEC = 15 * 60   # debounce auto-runs (15 min)
+AUTO_ANALYSIS_MIN_INTERVAL_SEC = 60 * 60   # debounce auto-runs (15 min)
 
 # --- Prompt size pressure tracking (for pre-emptive auto analysis) ---
 EVENT_BYTES: int = 0                  # approx char budget for "EVENTS:" bullets
 EVENT_UNIQUE_IDS: set[str] = set()    # unique entities seen since last snapshot
 
 # Soft ceilings to trigger auto-run early (tweak to taste or move to config)
-EVENTS_TRIGGER_CHARS   = int(EVENTS_MAX_CHARS * 0.75)  # e.g. ~2250 chars
-EVENTS_TRIGGER_UNIQUE  = 80                            # ~80 distinct entities
-AUTO_SIZE_MIN_INTERVAL_SEC = 10 * 60                   # 10 min debounce (size-based)
+EVENTS_TRIGGER_CHARS   = int(EVENTS_MAX_CHARS * 1.50)  # e.g. ~2250 chars
+EVENTS_TRIGGER_UNIQUE  = 200                            # ~80 distinct entities
+AUTO_SIZE_MIN_INTERVAL_SEC = 60 * 60                   # 10 min debounce (size-based)
 
 
 # History packing defaults (prompt-balance knobs)
@@ -563,9 +563,9 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                     EVENT_BYTES = 0
                     EVENT_UNIQUE_IDS.clear()
 
-
                 if not events:
-                    summary = "No notable events recorded."
+                    # no events → skip auto‑analysis
+                    return {"summary": "No notable events recorded.", "actions": [], "row": None}
                 else:
                     # ----- Topology -----
                     topo = await fetch_topology_snapshot(ha, max_lines=TOPO_MAX_LINES)
