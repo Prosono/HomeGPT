@@ -567,12 +567,12 @@ async function loadStatus() {
   renderStatus(data);
 }
 
-async function loadHistory() {
-  let rows = await jsonFetch(api("history"));
-  if (!rows) rows = [];
-  const dataRows = Array.isArray(rows) ? rows : Object.values(rows);
-  renderGrid(dataRows);
-}
+//async function loadHistory() {
+//  let rows = await jsonFetch(api("history"));
+//  if (!rows) rows = [];
+//  const dataRows = Array.isArray(rows) ? rows : Object.values(rows);
+//  renderGrid(dataRows);
+//}
 
 // ---------- Interactions ----------
 async function toggleMode() {
