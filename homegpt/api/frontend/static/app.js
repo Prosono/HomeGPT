@@ -371,6 +371,171 @@ function extractMetrics(summary = "") {
   return { energy, power };
 }
 
+// --- scoring helpers ---
+function scoreSection(bodyTokens) {
+  // simple severity: lists count + long paragraphs weight
+  let score = 0;
+  for (const t of (bodyTokens || [])) {
+    if (t.type === "list") score += t.items?.length || 0;
+    if (t.type === "paragraph") {
+      const len = (t.text || "").trim().length;
+      if (len > 60) score += 1;
+      if (len > 180) score += 1;
+    }
+  }
+  return score;
+}
+
+// Return map: { hourIso: { security: n, comfort: n, energy: n, anomalies: n }, meta: {hourIso:[rows]} }
+function buildHeatmapData(rows) {
+  const buckets = {};
+  const meta = {}; // keep rows per hour for click-through
+  const cats = ["security","comfort","energy","anomalies"];
+
+  rows.forEach(r => {
+    const row = Array.isArray(r) ? { ts: r[1], summary: r[4] } : r;
+    const ts = new Date(row.ts || Date.now());
+    const hourIso = new Date(ts.getFullYear(), ts.getMonth(), ts.getDate(), ts.getHours()).toISOString();
+
+    if (!buckets[hourIso]) buckets[hourIso] = { security:0, comfort:0, energy:0, anomalies:0 };
+    if (!meta[hourIso]) meta[hourIso] = [];
+    meta[hourIso].push(row);
+
+    const sections = splitSections(row.summary || "");
+    // sum per canonical category
+    for (const sec of sections) {
+      const key = canonicalizeTitle(sec.title || "");
+      if (!cats.includes(key)) continue;
+      buckets[hourIso][key] += scoreSection(sec.bodyTokens);
+    }
+  });
+
+  // normalize hours ascending
+  const hours = Object.keys(buckets).sort();
+  return { hours, buckets, meta };
+}
+
+// intensity → color (cool to warm)
+function cellColor(v, vmax) {
+  if (!vmax) return "#0f172a";
+  const t = Math.max(0, Math.min(1, v / vmax));
+  // 220°(blue) → 40°(amber) hue sweep
+  const hue = 220 - 180 * Math.pow(t, 0.8);
+  const light = 18 + 42 * Math.pow(t, 0.6);
+  return `hsl(${hue} 85% ${light}%)`;
+}
+
+// Render the heatmap grid
+function renderHeatmap(rows, filter = "all") {
+  const wrap = document.getElementById("analysisHeatmap");
+  if (!wrap) return;
+
+  const { hours, buckets, meta } = buildHeatmapData(rows);
+  const cats = [
+    { key: "security",  label: "Security"  },
+    { key: "comfort",   label: "Comfort"   },
+    { key: "energy",    label: "Energy"    },
+    { key: "anomalies", label: "Anomalies" }
+  ];
+
+  // compute vmax for color scaling (optionally per category)
+  const vmax = {};
+  cats.forEach(c => {
+    let m = 0;
+    hours.forEach(h => { m = Math.max(m, buckets[h]?.[c.key] || 0); });
+    vmax[c.key] = Math.max(1, m);
+  });
+
+  // CSS grid: 1 sticky label col + hour columns
+  wrap.style.gridTemplateColumns = `max-content repeat(${hours.length}, 20px)`;
+
+  // build rows
+  wrap.innerHTML = "";
+  cats.forEach(c => {
+    if (filter !== "all" && filter !== c.key) return;
+    // label cell
+    const label = document.createElement("div");
+    label.textContent = c.label;
+    label.className = "hm-label";
+    wrap.appendChild(label);
+
+    // hour cells
+    hours.forEach(h => {
+      const v = buckets[h]?.[c.key] || 0;
+      const cell = document.createElement("div");
+      cell.className = "hm-cell";
+      cell.dataset.has = String(v > 0 ? 1 : 0);
+      cell.style.background = cellColor(v, vmax[c.key]);
+
+      // tooltip
+      const tip = document.createElement("div");
+      tip.className = "hm-tooltip";
+      tip.textContent = `${new Date(h).toLocaleString()} • ${c.label}: ${v}`;
+      cell.appendChild(tip);
+
+      // click → open most relevant analysis for that hour + category
+      cell.addEventListener("click", () => {
+        const candidates = (meta[h] || []);
+        // pick the row with highest category score
+        let best = null, bestScore = -1;
+        for (const row of candidates) {
+          const sections = splitSections(row.summary || "");
+          for (const sec of sections) {
+            if (canonicalizeTitle(sec.title || "") === c.key) {
+              const s = scoreSection(sec.bodyTokens);
+              if (s > bestScore) { bestScore = s; best = row; }
+            }
+          }
+        }
+        if (best) openModal(best);
+      });
+
+      wrap.appendChild(cell);
+    });
+  });
+}
+
+// hook up filter buttons
+function initHeatmapFilters(rows) {
+  document.querySelectorAll('[data-hm-filter]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const f = btn.getAttribute('data-hm-filter');
+      renderHeatmap(rows, f);
+    });
+  });
+}
+
+
+// Return map: { hourIso: { security: n, comfort: n, energy: n, anomalies: n }, meta: {hourIso:[rows]} }
+function buildHeatmapData(rows) {
+  const buckets = {};
+  const meta = {}; // keep rows per hour for click-through
+  const cats = ["security","comfort","energy","anomalies"];
+
+  rows.forEach(r => {
+    const row = Array.isArray(r) ? { ts: r[1], summary: r[4] } : r;
+    const ts = new Date(row.ts || Date.now());
+    const hourIso = new Date(ts.getFullYear(), ts.getMonth(), ts.getDate(), ts.getHours()).toISOString();
+
+    if (!buckets[hourIso]) buckets[hourIso] = { security:0, comfort:0, energy:0, anomalies:0 };
+    if (!meta[hourIso]) meta[hourIso] = [];
+    meta[hourIso].push(row);
+
+    const sections = splitSections(row.summary || "");
+    // sum per canonical category
+    for (const sec of sections) {
+      const key = canonicalizeTitle(sec.title || "");
+      if (!cats.includes(key)) continue;
+      buckets[hourIso][key] += scoreSection(sec.bodyTokens);
+    }
+  });
+
+  // normalize hours ascending
+  const hours = Object.keys(buckets).sort();
+  return { hours, buckets, meta };
+}
+
+
 async function loadHistory() {
   let rows = await jsonFetch(api("history"));
   if (!rows) rows = [];
@@ -378,6 +543,8 @@ async function loadHistory() {
   
   renderAnalysisTimeline(dataRows);
   renderGrid(dataRows); // existing cards
+  renderHeatmap(dataRows, "all");
+  initHeatmapFilters(dataRows);
 
   // --- NEW: Build data for the chart ---
   const { labels, categoryCounts, categoryDetails } = buildCategoryChartData(dataRows);

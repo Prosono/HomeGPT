@@ -393,3 +393,56 @@ body {
   font-size: 0.9rem;
   line-height: 1.4;
 }
+
+.heatmap {
+  display: grid;
+  gap: 4px;
+  /* grid columns set in JS based on hours */
+}
+
+.hm-row {
+  display: contents; /* lets cells align into the grid columns */
+}
+
+.hm-label {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: transparent;
+  align-self: center;
+  font-size: .8rem;
+  color: #cbd5e1;
+  text-align: right;
+  padding-right: 6px;
+}
+
+.hm-cell {
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background: #111827; /* zero intensity */
+  position: relative;
+  cursor: pointer;
+  outline: 1px solid rgba(255,255,255,0.04);
+  transition: transform .05s;
+}
+.hm-cell:hover { transform: scale(1.08); }
+
+.hm-cell[data-has="0"] { background: #0f172a; }
+
+.hm-tooltip {
+  position: absolute;
+  top: -8px; left: 50%;
+  transform: translate(-50%, -100%);
+  background: rgba(15, 23, 42, .95);
+  color: #e5e7eb;
+  padding: 6px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+  display: none;
+  box-shadow: 0 6px 18px rgba(0,0,0,.35);
+  border: 1px solid rgba(255,255,255,.08);
+}
+.hm-cell:hover .hm-tooltip { display: block; }
