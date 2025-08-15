@@ -357,10 +357,16 @@ async function loadHistory() {
 }
 
 function renderTrendChart(labels, energyData, powerData) {
-  const ctx = document.getElementById('analysisChart').getContext('2d');
-  // Destroy existing chart if present (to avoid overlaying old data)
-  if (window.analysisChart) window.analysisChart.destroy();
-  window.analysisChart = new Chart(ctx, {
+  const el = document.getElementById('analysisChart');
+  if (!el) return;
+  const ctx = el.getContext('2d');
+
+  // Use a different global to store the Chart.js instance
+  if (window._analysisChart) {
+    window._analysisChart.destroy();
+  }
+
+  window._analysisChart = new Chart(ctx, {
     type: 'line',
     data: {
       labels,
@@ -368,7 +374,7 @@ function renderTrendChart(labels, energyData, powerData) {
         {
           label: 'Hourly energy usage (kWh)',
           data: energyData,
-          borderColor: '#34d399', // emerald-400
+          borderColor: '#34d399',
           backgroundColor: 'transparent',
           tension: 0.3,
           spanGaps: true
@@ -376,7 +382,7 @@ function renderTrendChart(labels, energyData, powerData) {
         {
           label: 'Current power draw (W)',
           data: powerData,
-          borderColor: '#60a5fa', // blue-400
+          borderColor: '#60a5fa',
           backgroundColor: 'transparent',
           tension: 0.3,
           spanGaps: true,
@@ -387,10 +393,7 @@ function renderTrendChart(labels, energyData, powerData) {
     options: {
       responsive: true,
       interaction: { mode: 'index', intersect: false },
-      plugins: {
-        tooltip: { enabled: true },
-        legend: { position: 'top' }
-      },
+      plugins: { tooltip: { enabled: true }, legend: { position: 'top' } },
       scales: {
         y: {
           type: 'linear',
@@ -406,13 +409,12 @@ function renderTrendChart(labels, energyData, powerData) {
           title: { display: true, text: 'W' },
           grid: { drawOnChartArea: false }
         },
-        x: {
-          title: { display: true, text: 'Analysis timestamp' }
-        }
+        x: { title: { display: true, text: 'Analysis timestamp' } }
       }
     }
   });
 }
+
 
 
 // Build preview data: pills, first points, and a numeric series (sparkline)
