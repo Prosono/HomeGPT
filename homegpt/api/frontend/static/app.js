@@ -323,6 +323,44 @@ function splitSections(markdown = "") {
   return sections;
 }
 
+function renderAnalysisTimeline(historyRows) {
+  const container = document.getElementById('analysisTimeline');
+  if (!container) return;
+  container.innerHTML = "";
+
+  historyRows.forEach(row => {
+    const ts = row.ts || row[1];
+    const summary = row.summary || row[4] || "";
+    const categories = [];
+
+    // Detect categories
+    if (/^Security\s*-/im.test(summary)) categories.push({ name: "Security", class: "category-security" });
+    if (/^Comfort\s*-/im.test(summary)) categories.push({ name: "Comfort", class: "category-comfort" });
+    if (/^Energy\s*-/im.test(summary)) categories.push({ name: "Energy", class: "category-energy" });
+    if (/^Anomalies\s*-/im.test(summary)) categories.push({ name: "Anomalies", class: "category-anomalies" });
+
+    // Create entry
+    const entry = document.createElement('div');
+    entry.className = 'timeline-entry';
+    entry.innerHTML = `
+      <div class="timestamp">${new Date(ts).toLocaleString()}</div>
+      <div class="categories">
+        ${categories.map(c => `<span class="category-tag ${c.class}">${c.name}</span>`).join("")}
+      </div>
+      <div class="details">${summary.replace(/\n/g, '<br>')}</div>
+    `;
+
+    // Expand/collapse on click
+    entry.addEventListener('click', () => {
+      const details = entry.querySelector('.details');
+      details.style.display = details.style.display === 'block' ? 'none' : 'block';
+    });
+
+    container.appendChild(entry);
+  });
+}
+
+
 // Extract the first “kWh” and “W” value from a summary string
 function extractMetrics(summary = "") {
   let energy = null, power = null;
@@ -338,7 +376,7 @@ async function loadHistory() {
   if (!rows) rows = [];
   const dataRows = Array.isArray(rows) ? rows : Object.values(rows);
   
-
+  renderAnalysisTimeline(dataRows);
   renderGrid(dataRows); // existing cards
 
   // --- NEW: Build data for the chart ---
