@@ -122,17 +122,30 @@
       <div class="mb-6">
         <div class="flex items-center justify-between mb-2">
           <h2>Analysis Heatmap</h2>
-          <div class="flex gap-2 text-sm">
-            <button class="chip" data-hm-filter="all">All</button>
-            <button class="chip" data-hm-filter="security">Security</button>
-            <button class="chip" data-hm-filter="comfort">Comfort</button>
-            <button class="chip" data-hm-filter="energy">Energy</button>
-            <button class="chip" data-hm-filter="anomalies">Anomalies</button>
+          <div class="flex items-center gap-3 text-sm">
+            <div class="flex gap-2">
+              <button class="chip" data-hm-range="24">24h</button>
+              <button class="chip" data-hm-range="48">48h</button>
+              <button class="chip" data-hm-range="168">7d</button>
+            </div>
+            <div class="flex items-center gap-2">
+              <span>Min severity</span>
+              <input id="hm-threshold" type="range" min="0" max="6" step="1" value="0" />
+              <span id="hm-threshold-val" class="text-gray-400">0</span>
+            </div>
+            <div class="flex gap-2">
+              <button class="chip" data-hm-filter="all">All</button>
+              <button class="chip" data-hm-filter="security">Security</button>
+              <button class="chip" data-hm-filter="comfort">Comfort</button>
+              <button class="chip" data-hm-filter="energy">Energy</button>
+              <button class="chip" data-hm-filter="anomalies">Anomalies</button>
+            </div>
           </div>
         </div>
         <div id="analysisHeatmap" class="heatmap"></div>
         <div class="text-xs text-gray-400 mt-1">X: hour • Y: category • intensity = findings/severity</div>
       </div>
+
 
       <!-- Analyses grid -->
       <div id="analysisGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>

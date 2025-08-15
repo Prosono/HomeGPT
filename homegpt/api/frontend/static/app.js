@@ -372,49 +372,85 @@ function extractMetrics(summary = "") {
 }
 
 // --- scoring helpers ---
-function scoreSection(bodyTokens) {
-  // simple severity: lists count + long paragraphs weight
+function scoreSection(bodyTokens, catKey) {
+  // base: list items + long paragraphs
   let score = 0;
   for (const t of (bodyTokens || [])) {
-    if (t.type === "list") score += t.items?.length || 0;
+    if (t.type === "list") score += Math.min(3, t.items?.length || 0);
     if (t.type === "paragraph") {
       const len = (t.text || "").trim().length;
       if (len > 60) score += 1;
       if (len > 180) score += 1;
     }
   }
+  // keyword weighting per category (tunable)
+  const txt = (bodyTokens || []).map(t => t.text || "").join(" ").toLowerCase();
+  const add = (arr, w=1) => arr.forEach(k => { if (txt.includes(k)) score += w; });
+
+  if (catKey === "security") {
+    add(["unlocked","open","door","window","garage","alarm"], 2);
+    add(["unknown","not_home","detected"], 1);
+  } else if (catKey === "comfort") {
+    add(["cold","hot","draft","open window","heating"], 1);
+  } else if (catKey === "energy") {
+    add(["w","kw","kwh","price","cheapest","peak","limit"], 1);
+  } else if (catKey === "anomalies") {
+    add(["unavailable","error","stuck","offline","failed"], 2);
+  }
   return score;
 }
 
+
+function makeContinuousHours(endDate, hoursBack) {
+  const hours = [];
+  // align end to current hour (e.g., 10:00, 11:00, …)
+  const end = new Date(endDate);
+  end.setMinutes(0,0,0);
+  for (let i = hoursBack - 1; i >= 0; i--) {
+    const d = new Date(end.getTime() - i * 3600 * 1000);
+    hours.push(d.toISOString());
+  }
+  return hours; // strictly increasing ISO hours
+}
+
 // Return map: { hourIso: { security: n, comfort: n, energy: n, anomalies: n }, meta: {hourIso:[rows]} }
-function buildHeatmapData(rows) {
-  const buckets = {};
-  const meta = {}; // keep rows per hour for click-through
+function buildHeatmapData(rows, hoursBack = 24) {
   const cats = ["security","comfort","energy","anomalies"];
+  const end = Date.now();
+  const hours = makeContinuousHours(end, hoursBack);
+
+  // init matrices
+  const buckets = {};
+  const meta = {};
+  hours.forEach(h => {
+    buckets[h] = { security:0, comfort:0, energy:0, anomalies:0 };
+    meta[h] = [];
+  });
+
+  // drop rows outside range
+  const startTs = new Date(hours[0]).getTime();
+  const endTs   = new Date(hours[hours.length - 1]).getTime() + 3599999;
 
   rows.forEach(r => {
     const row = Array.isArray(r) ? { ts: r[1], summary: r[4] } : r;
-    const ts = new Date(row.ts || Date.now());
-    const hourIso = new Date(ts.getFullYear(), ts.getMonth(), ts.getDate(), ts.getHours()).toISOString();
+    const ts = new Date(row.ts || Date.now()).getTime();
+    if (ts < startTs || ts > endTs) return;
 
-    if (!buckets[hourIso]) buckets[hourIso] = { security:0, comfort:0, energy:0, anomalies:0 };
-    if (!meta[hourIso]) meta[hourIso] = [];
+    // hour bucket index
+    const hAligned = new Date(ts); hAligned.setMinutes(0,0,0);
+    const hourIso = hAligned.toISOString();
     meta[hourIso].push(row);
 
     const sections = splitSections(row.summary || "");
-    // sum per canonical category
     for (const sec of sections) {
       const key = canonicalizeTitle(sec.title || "");
       if (!cats.includes(key)) continue;
-      buckets[hourIso][key] += scoreSection(sec.bodyTokens);
+      buckets[hourIso][key] += scoreSection(sec.bodyTokens, key);
     }
   });
 
-  // normalize hours ascending
-  const hours = Object.keys(buckets).sort();
   return { hours, buckets, meta };
 }
-
 // intensity → color (cool to warm)
 function cellColor(v, vmax) {
   if (!vmax) return "#0f172a";
@@ -425,12 +461,19 @@ function cellColor(v, vmax) {
   return `hsl(${hue} 85% ${light}%)`;
 }
 
-// Render the heatmap grid
-function renderHeatmap(rows, filter = "all") {
+function cellColor(v, vmax) {
+  if (!vmax) return "#0f172a";
+  const t = Math.max(0, Math.min(1, v / vmax));
+  const hue = 220 - 180 * Math.pow(t, 0.8);     // blue → amber
+  const light = 18 + 42 * Math.pow(t, 0.6);
+  return `hsl(${hue} 85% ${light}%)`;
+}
+
+function renderHeatmap(rows, { range=24, filter="all", threshold=0 } = {}) {
   const wrap = document.getElementById("analysisHeatmap");
   if (!wrap) return;
 
-  const { hours, buckets, meta } = buildHeatmapData(rows);
+  const { hours, buckets, meta } = buildHeatmapData(rows, range);
   const cats = [
     { key: "security",  label: "Security"  },
     { key: "comfort",   label: "Comfort"   },
@@ -438,7 +481,7 @@ function renderHeatmap(rows, filter = "all") {
     { key: "anomalies", label: "Anomalies" }
   ];
 
-  // compute vmax for color scaling (optionally per category)
+  // vmax per category for color scaling
   const vmax = {};
   cats.forEach(c => {
     let m = 0;
@@ -446,14 +489,14 @@ function renderHeatmap(rows, filter = "all") {
     vmax[c.key] = Math.max(1, m);
   });
 
-  // CSS grid: 1 sticky label col + hour columns
-  wrap.style.gridTemplateColumns = `max-content repeat(${hours.length}, 20px)`;
-
-  // build rows
+  // grid: sticky label + N hour columns
+  wrap.style.gridTemplateColumns = `max-content repeat(${hours.length}, 22px)`;
   wrap.innerHTML = "";
+
   cats.forEach(c => {
     if (filter !== "all" && filter !== c.key) return;
-    // label cell
+
+    // label column
     const label = document.createElement("div");
     label.textContent = c.label;
     label.className = "hm-label";
@@ -462,27 +505,42 @@ function renderHeatmap(rows, filter = "all") {
     // hour cells
     hours.forEach(h => {
       const v = buckets[h]?.[c.key] || 0;
+      if (v < threshold) {
+        const cell = document.createElement("div");
+        cell.className = "hm-cell";
+        cell.style.background = "#0f172a";
+        wrap.appendChild(cell);
+        return;
+      }
+
       const cell = document.createElement("div");
       cell.className = "hm-cell";
-      cell.dataset.has = String(v > 0 ? 1 : 0);
       cell.style.background = cellColor(v, vmax[c.key]);
 
-      // tooltip
+      // tooltip with first bullet/paragraph snippet for that category
       const tip = document.createElement("div");
       tip.className = "hm-tooltip";
       tip.textContent = `${new Date(h).toLocaleString()} • ${c.label}: ${v}`;
       cell.appendChild(tip);
 
-      // click → open most relevant analysis for that hour + category
+      // hover → highlight matching cards
+      cell.addEventListener("mouseenter", () => {
+        const rowsAtHour = meta[h] || [];
+        highlightCards(rowsAtHour, c.key);
+      });
+      cell.addEventListener("mouseleave", () => {
+        highlightCards([], c.key);
+      });
+
+      // click → open best analysis for that hour/category
       cell.addEventListener("click", () => {
-        const candidates = (meta[h] || []);
-        // pick the row with highest category score
+        const candidates = meta[h] || [];
         let best = null, bestScore = -1;
         for (const row of candidates) {
           const sections = splitSections(row.summary || "");
           for (const sec of sections) {
             if (canonicalizeTitle(sec.title || "") === c.key) {
-              const s = scoreSection(sec.bodyTokens);
+              const s = scoreSection(sec.bodyTokens, c.key);
               if (s > bestScore) { bestScore = s; best = row; }
             }
           }
@@ -492,6 +550,17 @@ function renderHeatmap(rows, filter = "all") {
 
       wrap.appendChild(cell);
     });
+  });
+}
+
+// Visually emphasize preview cards that match the hour/category rows
+function highlightCards(rowsAtHour, catKey) {
+  const ids = new Set((rowsAtHour || []).map(r => (Array.isArray(r) ? r[0] : r.id)));
+  document.querySelectorAll(".preview-card").forEach(card => {
+    const title = card.querySelector(".preview-title")?.textContent?.toLowerCase() || "";
+    const matches = ids.size === 0 ? false : true; // you can match by row id if you inject it on card
+    card.classList.toggle("ring-1", matches);
+    card.classList.toggle("ring-blue-300/50", matches);
   });
 }
 
@@ -543,8 +612,42 @@ async function loadHistory() {
   
   renderAnalysisTimeline(dataRows);
   renderGrid(dataRows); // existing cards
-  renderHeatmap(dataRows, "all");
+
+  let HM_STATE = { range: 24, filter: "all", threshold: 0 };
+
+  renderHeatmap(dataRows, HM_STATE);
+
+  // filter chips
+  document.querySelectorAll('[data-hm-filter]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      HM_STATE.filter = btn.getAttribute('data-hm-filter');
+      renderHeatmap(dataRows, HM_STATE);
+    });
+  });
+
+  // range chips
+  document.querySelectorAll('[data-hm-range]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      HM_STATE.range = parseInt(btn.getAttribute('data-hm-range'), 10) || 24;
+      renderHeatmap(dataRows, HM_STATE);
+    });
+  });
+
+  // severity threshold slider
+  const thr = document.getElementById('hm-threshold');
+  const thrVal = document.getElementById('hm-threshold-val');
+  if (thr && thrVal) {
+    thr.addEventListener('input', () => {
+      HM_STATE.threshold = parseInt(thr.value, 10) || 0;
+      thrVal.textContent = String(HM_STATE.threshold);
+      renderHeatmap(dataRows, HM_STATE);
+    });
+  }
+
+
   initHeatmapFilters(dataRows);
+
+  
 
   // --- NEW: Build data for the chart ---
   const { labels, categoryCounts, categoryDetails } = buildCategoryChartData(dataRows);
