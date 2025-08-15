@@ -337,11 +337,12 @@ async function loadHistory() {
   let rows = await jsonFetch(api("history"));
   if (!rows) rows = [];
   const dataRows = Array.isArray(rows) ? rows : Object.values(rows);
+  
 
   renderGrid(dataRows); // existing cards
 
   // --- NEW: Build data for the chart ---
-  const labels    = [];
+  const { labels, categoryCounts, categoryDetails } = buildCategoryChartData(dataRows);
   const energyPts = [];
   const powerPts  = [];
   dataRows.forEach(row => {
@@ -354,7 +355,129 @@ async function loadHistory() {
   });
 
   renderTrendChart(labels, energyPts, powerPts);
+
+  renderCategoryTrendChart(labels, categoryCounts, categoryDetails);
 }
+
+function renderCategoryTrendChart(labels, counts, details) {
+  const el = document.getElementById('categoryChart');
+  if (!el) return;
+  const ctx = el.getContext('2d');
+
+  if (window._categoryChart) {
+    window._categoryChart.destroy();
+  }
+
+  window._categoryChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Security Events',
+          data: counts.Security,
+          borderColor: '#ef4444',
+          backgroundColor: 'rgba(239,68,68,0.2)',
+          fill: false,
+          tension: 0.3
+        },
+        {
+          label: 'Comfort Issues',
+          data: counts.Comfort,
+          borderColor: '#f59e0b',
+          backgroundColor: 'rgba(245,158,11,0.2)',
+          fill: false,
+          tension: 0.3
+        },
+        {
+          label: 'Energy Alerts',
+          data: counts.Energy,
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59,130,246,0.2)',
+          fill: false,
+          tension: 0.3
+        },
+        {
+          label: 'Anomalies',
+          data: counts.Anomalies,
+          borderColor: '#8b5cf6',
+          backgroundColor: 'rgba(139,92,246,0.2)',
+          fill: false,
+          tension: 0.3
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      interaction: { mode: 'nearest', intersect: true },
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: (ctx) => {
+              const cat = ctx.dataset.label.replace(/ Events| Issues| Alerts/g, "");
+              const detail = details[cat][ctx.dataIndex];
+              return detail ? `${ctx.dataset.label}: ${detail}` : `${ctx.dataset.label}: None`;
+            }
+          }
+        }
+      },
+      onClick: (evt, elements) => {
+        if (elements.length > 0) {
+          const { datasetIndex, index } = elements[0];
+          const cat = window._categoryChart.data.datasets[datasetIndex].label.replace(/ Events| Issues| Alerts/g, "");
+          const detail = details[cat][index];
+          if (detail) {
+            alert(`${cat} event at ${labels[index]}:\n${detail}`);
+            // Optionally: scroll to that card in your UI
+          }
+        }
+      },
+      scales: {
+        y: { title: { display: true, text: "Event Count" }, beginAtZero: true },
+        x: { title: { display: true, text: "Time" } }
+      }
+    }
+  });
+}
+
+
+function buildCategoryChartData(historyRows) {
+  const labels = [];
+  const categoryCounts = {
+    Security: [],
+    Comfort: [],
+    Energy: [],
+    Anomalies: []
+  };
+  const categoryDetails = {
+    Security: [],
+    Comfort: [],
+    Energy: [],
+    Anomalies: []
+  };
+
+  historyRows.forEach(row => {
+    const ts = row.ts || row[1];
+    const summary = row.summary || row[4] || "";
+    labels.push(new Date(ts).toLocaleString());
+
+    // For each category, find mentions in the summary
+    ["Security", "Comfort", "Energy", "Anomalies"].forEach(cat => {
+      const regex = new RegExp(`^${cat} - (.+)`, "im");
+      const match = summary.match(regex);
+      if (match) {
+        categoryCounts[cat].push(1);
+        categoryDetails[cat].push(match[1]);
+      } else {
+        categoryCounts[cat].push(0);
+        categoryDetails[cat].push(null);
+      }
+    });
+  });
+
+  return { labels, categoryCounts, categoryDetails };
+}
+
 
 function renderTrendChart(labels, energyData, powerData) {
   const el = document.getElementById('analysisChart');
