@@ -460,7 +460,72 @@ def _load_context_memos(entity_ids: list[str], category: str):
         out += [r[0] for r in c.execute(q2, (category,)).fetchall()]
     return out
 
+
+def _save_feedback_generic(payload: dict):
+    """
+    Accepts both:
+      {event_id, note, kind?, source?}
+    and legacy / UI forms with {analysis_id, body, category, note, kind?}.
+    Resolves/creates an analysis_events row if needed, then inserts feedback.
+    """
+    note = (payload.get("note") or "").strip()
+    if not note:
+        raise HTTPException(status_code=400, detail="Missing note")
+
+    eid = payload.get("event_id")
+
+    # If no event_id, try to resolve by (analysis_id + body). Create event row if needed.
+    if not eid:
+        aid = payload.get("analysis_id")
+        body = (payload.get("body") or "").strip()
+        if not (aid and body):
+            raise HTTPException(status_code=400, detail="Missing event_id or (analysis_id+body)")
+        with db._conn() as c:
+            row = c.execute(
+                "SELECT id FROM analysis_events WHERE analysis_id=? AND body=? LIMIT 1",
+                (int(aid), body)
+            ).fetchone()
+            if row:
+                eid = int(row[0])
+            else:
+                ent_ids = ",".join(_extract_entity_ids(body))
+                ts = datetime.utcnow().isoformat()
+                c.execute(
+                    "INSERT INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) VALUES (?,?,?,?,?,?)",
+                    (int(aid), ts, (payload.get("category") or "generic"), body[:140], body, ent_ids),
+                )
+                eid = int(c.lastrowid)
+                c.commit()
+
+    ts = datetime.utcnow().isoformat()
+    kind = payload.get("kind") or "context"
+    source = payload.get("source") or "user"
+
+    # Insert using whatever columns exist (fresh install has both).
+    with db._conn() as c:
+        cols = {r[1] for r in c.execute("PRAGMA table_info(event_feedback)").fetchall()}
+        params = [int(eid), ts, note]
+        if "kind" in cols and "source" in cols:
+            c.execute(
+                "INSERT INTO event_feedback (event_id, ts, note, kind, source) VALUES (?,?,?,?,?)",
+                params + [kind, source],
+            )
+        elif "kind" in cols:
+            c.execute(
+                "INSERT INTO event_feedback (event_id, ts, note, kind) VALUES (?,?,?,?)",
+                params + [kind],
+            )
+        else:
+            c.execute(
+                "INSERT INTO event_feedback (event_id, ts, note) VALUES (?,?,?)",
+                params,
+            )
+        c.commit()
+    return {"ok": True}
+
 ##----------- COMPRESION start ---------------------------
+
+
 
 def strip_noise(text: str) -> str:
     """Drop lines that are UI/config spam and blank lines."""
@@ -882,25 +947,38 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
     return {"summary": summary, "actions": actions, "row": row}
 
 
+#@app.post("/api/feedback")
+#def post_feedback_alias(payload: dict = Body(...)):
+#    """
+#    Compatibility endpoint. Accepts either:
+#      {event_id, note, kind?}
+#    or legacy: {event_id, feedback, kind?}
+#    Also supports {analysis_id, body, category, note} when event_id is unknown.
+#    """
+#    try:
+#        if not payload.get("note") and payload.get("feedback"):
+#            payload["note"] = payload["feedback"]
+
+#        model = EventFeedbackIn(**payload)   # lets Pydantic do validation/aliasing
+#        return post_event_feedback(model)    # call the real handler
+#    except HTTPException:
+#        raise
+#    except Exception as e:
+#        logger.exception("Error in /api/feedback: %s", e)
+#        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/feedback")
 def post_feedback_alias(payload: dict = Body(...)):
-    """
-    Compatibility endpoint. Accepts either:
-      {event_id, note, kind?}
-    or legacy: {event_id, feedback, kind?}
-    Also supports {analysis_id, body, category, note} when event_id is unknown.
-    """
+    # Support legacy {feedback: "..."} too
+    if not payload.get("note") and payload.get("feedback"):
+        payload = {**payload, "note": payload["feedback"]}
     try:
-        if not payload.get("note") and payload.get("feedback"):
-            payload["note"] = payload["feedback"]
-
-        model = EventFeedbackIn(**payload)   # lets Pydantic do validation/aliasing
-        return post_event_feedback(model)    # call the real handler
+        return _save_feedback_generic(payload)
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("Error in /api/feedback: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))        
 
 @app.get("/api/followups")
 def get_followups(analysis_id: int):
@@ -1322,6 +1400,7 @@ def get_history_item(analysis_id: int):
         logger.warning(f"Unexpected row format in history item: {row}")
         return row
 
+"""
 @app.post("/api/event_feedback")
 def post_event_feedback(payload: EventFeedbackIn):
     note = (payload.note or "").strip()
@@ -1373,7 +1452,17 @@ def post_event_feedback(payload: EventFeedbackIn):
         c.commit()
 
     return {"ok": True}
+"""
 
+@app.post("/api/event_feedback")
+def post_event_feedback_route(payload: dict = Body(...)):
+    try:
+        return _save_feedback_generic(payload)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error in /api/event_feedback: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/events")
