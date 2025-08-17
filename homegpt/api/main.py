@@ -421,19 +421,23 @@ def clamp_chars(text: str, max_chars: int) -> str:
 
 def _extract_followups(aid: int, ts: str, summary: str):
     import re
-    opts = re.findall(r'(?:\\(|\\b)(\\d+)[\\)\\.\\:]\\s*(.+?)(?=\\n\\d+|\\Z)', summary, flags=re.S)
+    # e.g. matches:
+    # 1) list automations
+    # 2. show energy timeline
+    # 3: troubleshoot sensor
+    FOLLOWUP_RE = re.compile(r'(?ms)^\s*\(?(\d+)[\)\.\:]\s*(.+?)(?=^\s*\(?\d+[\)\.\:]\s*|\Z)')
     rows = []
-    for num, label in opts:
-        label = " ".join(label.split())
-        if "list" in label.lower() and "automation" in label.lower():
+    for num, label in FOLLOWUP_RE.findall(summary):
+        lbl = " ".join(label.split()).strip().lower()
+        if "list" in lbl and "automation" in lbl:
             code = "list_automations"
-        elif "timeline" in label.lower() and ("energy" in label.lower() or "sensor" in label.lower()):
+        elif "timeline" in lbl and ("energy" in lbl or "sensor" in lbl):
             code = "show_energy_timeline"
-        elif "troubleshoot" in label.lower() or "faulty" in label.lower():
+        elif "troubleshoot" in lbl or "faulty" in lbl:
             code = "troubleshoot_sensor"
         else:
             continue
-        rows.append((aid, ts, label[:255], code))
+        rows.append((aid, ts, label.strip()[:255], code))
     return rows
 
 
