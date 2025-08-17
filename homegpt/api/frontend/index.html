@@ -253,6 +253,17 @@
   </form>
 </dialog>
 
+
+<!-- Modal Overlay -->
+<div id="detailsOverlay" class="overlay hidden">
+  <div id="overlayBackdrop" class="overlay-backdrop"></div>
+  <div class="overlay-content">
+    <button id="modalClose" class="modal-close">&times;</button>
+    <h2 id="modalTitle"></h2>
+    <div id="modalMeta" class="modal-meta"></div>
+    <div id="modalSummary" class="modal-body"></div>
+  </div>
+</div>
   <!-- Bridge for legacy IDs -->
   <script>
     (function () {
