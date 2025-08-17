@@ -173,7 +173,8 @@ def _extract_events_from_summary(aid: int, ts: str, summary: str):
     """
     Split a GPT summary into per‑category events.
     Each bullet or paragraph under Security/Comfort/Energy/Anomalies becomes its own row.
-    """
+   """
+    summary = _coerce_headings(summary)  # <<< add this
     events = []
     # Split the summary by markdown headings (### Security, etc.)
     blocks = re.split(r'(?im)^###\s+', summary)
@@ -313,6 +314,16 @@ def set_mode(mode: str = Query(...)):
     _save_config(cfg)
     return {"status": "ok", "mode": mode}
 
+
+def _coerce_headings(md: str) -> str:
+    labels = [
+        "Security","Comfort","Energy","Anomalies",
+        "Presence","Occupancy","Actions to take","Actions","Next steps"
+    ]
+    group = "|".join(map(re.escape, labels))
+    # turn lines that are just a label (optionally bold/with colon) into ### headings
+    pattern = re.compile(rf'(?im)^\s*(?:\*\*|__)?\s*({group})\s*(?:\*\*|__)?\s*:?\s*$')
+    return pattern.sub(lambda m: f"### {m.group(1)}", md or "")
 
 async def _fetch_history_all_entities(
     ha,

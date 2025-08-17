@@ -1047,10 +1047,14 @@ async function loadEvents() {
   const box = document.getElementById("eventsList");
   if (!box) return;
   box.innerHTML = rows.map(ev => `
-    <div class="event-row">
-      <span class="event-ts">${new Date(ev.ts).toLocaleString()}</span>
-      <span class="event-cat">${ev.category}</span>
-      <span class="event-body">${ev.title || ev.body}</span>
+    <div class="py-2 flex items-start gap-3">
+      <div class="min-w-[10ch] text-gray-400">${new Date(ev.ts).toLocaleString()}</div>
+      <span class="chip">${ev.category}</span>
+      <div class="flex-1">
+        <div class="font-medium">${ev.title || 'Event'}</div>
+        <div class="text-gray-400">${ev.body}</div>
+      </div>
+      <button class="chip" onclick="openFeedbackDialog({analysis_id:${ev.analysis_id}, event_id:${ev.id}, category:'${ev.category}', body:${JSON.stringify(ev.body)}})">Feedback</button>
     </div>
   `).join("");
 }
