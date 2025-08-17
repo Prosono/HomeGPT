@@ -1013,6 +1013,40 @@ def get_history_item(analysis_id: int):
         logger.warning(f"Unexpected row format in history item: {row}")
         return row
 
+# POST /api/event_feedback
+# body: { event_id, note, kind? }
+@app.post("/api/event_feedback")
+def post_event_feedback():
+    data = request.get_json(force=True) or {}
+    eid  = int(data.get("event_id"))
+    note = (data.get("note") or "").strip()
+    kind = (data.get("kind") or "context").strip()
+    if not eid or not note: abort(400, "Missing event_id or note")
+
+    ts = datetime.utcnow().isoformat()
+    with db:
+        db.execute("INSERT INTO event_feedback (event_id, ts, note, kind, source) VALUES (?,?,?,?,?)",
+                   (eid, ts, note, kind, "user"))
+    return jsonify({"ok": True})
+
+# GET /api/events?since=ISO&category=security|comfort|...
+@app.get("/api/events")
+def get_events():
+    q = "SELECT id, analysis_id, ts, category, title, body, entity_ids FROM analysis_events WHERE 1=1"
+    args = []
+    cat = request.args.get("category")
+    if cat:
+        q += " AND category=?"
+        args.append(cat)
+    since = request.args.get("since")
+    if since:
+        q += " AND ts>=?"
+        args.append(since)
+    q += " ORDER BY ts DESC LIMIT 200"
+    rows = db.execute(q, args).fetchall()
+    out = [dict(zip(["id","analysis_id","ts","category","title","body","entity_ids"], r)) for r in rows]
+    return jsonify(out)
+
 
 @app.get("/api/settings")
 def get_settings():

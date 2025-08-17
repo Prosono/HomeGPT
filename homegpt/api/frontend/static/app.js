@@ -1102,6 +1102,49 @@ function openModal(row) {
   }
   flush();
 
+  // after you build 'html' for the section body, enhance bullets:
+const tmp = document.createElement("div");
+tmp.innerHTML = html;
+
+// add feedback button to each list item/paragraph
+tmp.querySelectorAll("li, p").forEach(node => {
+  const text = node.textContent.trim();
+  if (!text) return;
+
+  // find a matching event (best-effort by title prefix)
+  // You can fetch once per modal: const events = await jsonFetch(api(`events?since=${row.ts}`));
+  // For simplicity here, post with (analysis_id, category, body_text) to resolve server-side.
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "chip chip--ghost ml-2";
+  btn.textContent = "Give feedback";
+  btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const note = prompt("Add context or correction for future analyses:");
+    if (!note) return;
+
+    // create or resolve event on the server by fuzzy match
+    await fetch(api("event_feedback"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        // server can resolve to event_id by matching (analysis_id, category, body)
+        analysis_id: row.id || row[0],
+        category: canonicalizeTitle(sec.title || ""),
+        body: text,
+        note
+      })
+    }).catch(console.error);
+    btn.textContent = "Saved ✓";
+  });
+
+  node.appendChild(btn);
+});
+
+body.innerHTML = tmp.innerHTML;
+
+
   // --- build UI: optional hero + masonry cards ---
   container.innerHTML = "";
 
