@@ -95,30 +95,20 @@ EVENT_LOCK = asyncio.Lock()
 _analysis_in_progress = asyncio.Event()
 _analysis_in_progress.clear()
 _last_auto_run_ts: float | None = None
-from datetime import datetime, timezone, timedelta
+
 
 # Import DB, models, analyzer
+# MODELS
 try:
     from .models import AnalysisRequest, Settings, FollowupRunRequest, EventFeedbackIn
 except ImportError:
-    from homegpt.api.models import AnalysisRequest, Settings, FollowupRunRequest, EventFeedbackIn
-
-try:
-    from . import db
-except ImportError:
-    from homegpt.api import db
-
-# analyzer is optional; import if present
-try:
-    from . import analyzer  # or: from homegpt.api import analyzer
-except Exception:
-    analyzer = None
-    
-        # real fallback used ONLY if both imports fail
+    try:
+        from homegpt.api.models import AnalysisRequest, Settings, FollowupRunRequest, EventFeedbackIn
+    except ImportError:
+        from pydantic import BaseModel
         class AnalysisRequest(BaseModel):
             mode: str | None = None
             focus: str | None = None
-
         class Settings(BaseModel):
             openai_api_key: str | None = None
             model: str | None = None
@@ -129,11 +119,9 @@ except Exception:
             dry_run: bool | None = None
             log_level: str | None = None
             language: str | None = None
-
         class FollowupRunRequest(BaseModel):
             analysis_id: int
             code: str
-
         class EventFeedbackIn(BaseModel):
             event_id: int | None = None
             analysis_id: int | None = None
@@ -142,19 +130,39 @@ except Exception:
             note: str
             kind: str | None = "context"
 
-        class db:  # type: ignore
+# DB
+try:
+    from . import db as _db
+except ImportError:
+    try:
+        from homegpt.api import db as _db
+    except ImportError:
+        import sqlite3, os
+        from pathlib import Path
+        class _DBFallback:
             @staticmethod
-            def init_db() -> None: ...
+            def _conn():
+                path = Path(os.environ.get("HOMEGPT_DB", "/config/homegpt.db"))
+                path.parent.mkdir(parents=True, exist_ok=True)
+                conn = sqlite3.connect(str(path))
+                conn.row_factory = sqlite3.Row
+                return conn
+            @staticmethod
+            def init_db(): ...
             @staticmethod
             def get_analyses(limit: int): return []
             @staticmethod
             def get_analysis(aid: int): return {}
             @staticmethod
             def add_analysis(mode, focus, summary, actions): return {}
-            @staticmethod
-            def _conn(): raise RuntimeError("db._conn not available in fallback")
+        _db = _DBFallback
+db = _db  # expose as 'db'
 
-        analyzer = None
+# analyzer is optional
+try:
+    from . import analyzer  # or: from homegpt.api import analyzer
+except Exception:
+    analyzer = None
 
 def _extract_entity_ids(text: str) -> list[str]:
     """Extract Home Assistant entity IDs from a string."""
