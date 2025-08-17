@@ -103,22 +103,7 @@
         </div>
       </div>
 
-      <!-- Analysis trends chart
-      <div class="mb-6">
-        <canvas id="analysisChart" height="200"></canvas>
-      </div>
-
-     Analysis trends chart Categories 
-      <div class="mb-6">
-        <h2>Category Trends</h2>
-        <canvas id="categoryChart" height="200"></canvas>
-      </div>
-
-      <div class="mb-6">
-        <h2>Analysis Timeline</h2>
-        <div id="analysisTimeline" class="timeline-container"></div>
-      </div>      --> 
-
+      <!-- Analysis Heatmap -->
       <div class="mb-6">
         <div class="flex items-center justify-between mb-2">
           <h2>Analysis Heatmap</h2>
@@ -145,7 +130,6 @@
         <div id="analysisHeatmap" class="heatmap"></div>
         <div class="text-xs text-gray-400 mt-1">X: hour • Y: category • intensity = findings/severity</div>
       </div>
-
 
       <!-- Analyses grid -->
       <div id="analysisGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"></div>
@@ -178,7 +162,7 @@
           <div class="hero-body" id="modalIntro">Latest insights for your home.</div>
         </div>
 
-        <!-- Category layout (optional; can be filled later) -->
+        <!-- Category layout -->
         <div class="modal-masonry hidden" id="modalMasonry">
           <section class="modal-section theme-security">
             <h3><i class="mdi mdi-shield-home-outline"></i>Security</h3>
@@ -215,8 +199,61 @@
     </div>
   </div>
 
-  <!-- Bridge: provide legacy IDs (#title/#meta/#summary) and
-     mirror their content ONE-WAY into the visible modal fields. -->
+<!-- Feedback dialog -->
+<dialog id="dlg-feedback" class="card rounded-xl p-6 text-gray-200 max-w-xl w-full">
+  <form id="fb-form" method="dialog" class="space-y-4">
+    <h3 class="text-lg font-extrabold">Send feedback</h3>
+
+    <!-- Context surface -->
+    <div class="text-xs text-gray-400 leading-relaxed" id="fb-context" aria-live="polite"></div>
+
+    <!-- Kind -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      <label class="block">
+        <span class="text-sm text-gray-300">Type</span>
+        <select id="fb-kind" class="input mt-1 w-full">
+          <option value="context">Context / Note</option>
+          <option value="correction">Correction</option>
+          <option value="ignore">Mark as noise</option>
+        </select>
+      </label>
+
+      <label class="block">
+        <span class="text-sm text-gray-300">Category</span>
+        <select id="fb-category" class="input mt-1 w-full">
+          <option>security</option>
+          <option>comfort</option>
+          <option>energy</option>
+          <option>anomalies</option>
+          <option>actions</option>
+          <option>generic</option>
+        </select>
+      </label>
+    </div>
+
+    <!-- Note -->
+    <label class="block">
+      <span class="text-sm text-gray-300">Your note</span>
+      <textarea id="fb-text" rows="4" class="input mt-1 w-full" placeholder="Add a short note that will help future analyses…"></textarea>
+    </label>
+
+    <!-- Hidden metadata (filled from JS) -->
+    <input type="hidden" id="fb-analysis-id" />
+    <input type="hidden" id="fb-event-id" />
+    <input type="hidden" id="fb-body" />
+
+    <!-- Buttons -->
+    <div class="flex items-center justify-end gap-2 pt-2">
+      <button type="button" id="fb-cancel" class="btn btn-ghost"><i class="mdi mdi-close"></i>Cancel</button>
+      <button type="submit" id="fb-submit" class="btn"><i class="mdi mdi-send"></i>Submit</button>
+    </div>
+
+    <!-- Result area -->
+    <div id="fb-result" class="text-sm text-gray-400"></div>
+  </form>
+</dialog>
+
+  <!-- Bridge for legacy IDs -->
   <script>
     (function () {
       function ensureAlias(aliasId, primaryId) {
@@ -225,15 +262,12 @@
 
         let alias = document.getElementById(aliasId);
         if (!alias) {
-          // Create a hidden alias element so old code can write to it
           alias = document.createElement(primary.tagName || 'div');
           alias.id = aliasId;
           alias.className = 'sr-only';
-          // Put the alias just before the primary so queries still find it early
           primary.parentNode.insertBefore(alias, primary);
         }
 
-        // ONE-WAY sync: whenever legacy alias changes, copy into the visible target
         const sync = () => { primary.innerHTML = alias.innerHTML; };
         new MutationObserver(sync).observe(alias, {
           childList: true,
@@ -241,11 +275,9 @@
           characterData: true
         });
 
-        // Initial sync in case alias already has content set imperatively
         sync();
       }
 
-      // Map legacy IDs -> visible IDs
       ensureAlias('title',   'modalTitle');
       ensureAlias('meta',    'modalMeta');
       ensureAlias('summary', 'modalSummary');

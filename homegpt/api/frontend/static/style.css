@@ -456,3 +456,28 @@ li:hover .feedback-btn,
 p:hover .feedback-btn {
   opacity: 1;
 }
+
+.followup-response {
+  background: rgba(0,0,0,0.3);
+  padding: 0.5rem;
+  border-radius: 6px;
+  font-family: monospace;
+  margin-top: 0.25rem;
+  white-space: pre-wrap;
+}
+.feedback-box {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 6px;
+}
+.feedback-box textarea {
+  width: 100%;
+  min-height: 60px;
+  margin-bottom: 0.25rem;
+}
+.feedback-ack {
+  font-size: 0.85rem;
+  color: #9ca3af;
+  margin-top: 0.25rem;
+}

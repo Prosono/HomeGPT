@@ -809,6 +809,69 @@ function renderTrendChart(labels, energyData, powerData) {
   });
 }
 
+// --- FEEDBACK DIALOG PLUMBING ---
+function openFeedbackDialog({ analysis_id, category = "generic", body = "", event_id = null, presetNote = "" } = {}) {
+  const dlg = $("dlg-feedback");
+  if (!dlg) return;
+
+  $("fb-analysis-id").value = analysis_id || "";
+  $("fb-event-id").value    = event_id || "";
+  $("fb-body").value        = body || "";
+  $("fb-kind").value        = "context";
+  $("fb-category").value    = (category || "generic").toLowerCase();
+  $("fb-text").value        = presetNote;
+
+  // Context preview for the user
+  $("fb-context").textContent = body ? `About: ${body.slice(0, 280)}${body.length > 280 ? "…" : ""}` : "";
+
+  $("fb-result").textContent = "";
+  dlg.showModal();
+}
+
+(function initFeedbackDialog(){
+  const dlg = $("dlg-feedback");
+  if (!dlg) return;
+
+  $("fb-cancel")?.addEventListener("click", () => dlg.close());
+
+  $("fb-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const submitBtn = $("fb-submit");
+    submitBtn.disabled = true;
+
+    // Build payload (server can resolve event by analysis_id + body if event_id omitted)
+    const payload = {
+      analysis_id: $("fb-analysis-id").value ? Number($("fb-analysis-id").value) : undefined,
+      event_id: $("fb-event-id").value ? Number($("fb-event-id").value) : undefined,
+      category: $("fb-category").value || "generic",
+      kind: $("fb-kind").value || "context",
+      note: ($("fb-text").value || "").trim(),
+      body: $("fb-body").value || ""
+    };
+
+    if (!payload.note) {
+      $("fb-result").textContent = "Please add a short note before submitting.";
+      submitBtn.disabled = false;
+      return;
+    }
+
+    try {
+      // Align with your backend route name:
+      await jsonFetch(api("event_feedback"), {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify(payload)
+      });
+      $("fb-result").textContent = "Thanks — saved!";
+      setTimeout(()=> dlg.close(), 600);
+    } catch (err) {
+      console.error("Feedback error:", err);
+      $("fb-result").textContent = "Sorry, failed to save feedback.";
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+})();
 
 
 // Build preview data: pills, first points, and a numeric series (sparkline)
@@ -1020,12 +1083,13 @@ async function openModal(row) {
   const meta      = $("modalMeta");
   const container = $("modalSummary");
 
+  // --- Title + meta ---
   title.innerHTML = `${modeIcon(row.mode)} <span class="capitalize">${row.mode ?? "passive"}</span> summary`;
   meta.textContent = [row.ts, row.focus ? `Focus: ${row.focus}` : ""].filter(Boolean).join(" • ");
 
   const raw = row.summary ?? "(No summary)";
 
-  // --- normalize bare labels into real Markdown headings ---
+  // --- normalize bare labels into Markdown headings ---
   const _escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const coerceHeadings = (md = "") => {
     const labels = [
@@ -1039,43 +1103,38 @@ async function openModal(row) {
     return md.replace(/\n{3,}/g, "\n\n");
   };
 
-  // Followups
+  // --- Followups ---
   const followups = await jsonFetch(api(`followups?analysis_id=${row.id}`)) || [];
   if (followups.length) {
-    const actionsWrap = document.createElement('div');
-    actionsWrap.className = 'followup-actions flex gap-2 mt-2';
+    const actionsWrap = document.createElement("div");
+    actionsWrap.className = "followup-actions flex gap-2 mt-2";
     followups.forEach(f => {
-      const b = document.createElement('button');
-      b.className = 'chip';
+      const b = document.createElement("button");
+      b.className = "chip";
       b.textContent = f.label;
-      b.addEventListener('click', async () => {
+      b.addEventListener("click", async () => {
         b.disabled = true;
         const data = await jsonFetch(api("followup/run"), {
           method: "POST",
           headers: {"Content-Type":"application/json"},
           body: JSON.stringify({ analysis_id: row.id, code: f.code })
         });
-        const pre = document.createElement('pre');
+        const pre = document.createElement("pre");
         pre.textContent = JSON.stringify(data.payload, null, 2);
-        document.getElementById('modalSummary').appendChild(pre);
+        document.getElementById("modalSummary").appendChild(pre);
       });
       actionsWrap.appendChild(b);
     });
     container.appendChild(actionsWrap);
   }
 
+  // --- Preprocess + tokenize ---
   const prepped = coerceHeadings(raw);
-
-  // --- tokenize with Marked ---
   let tokens = [];
-  try {
-    tokens = (window.marked && marked.lexer) ? marked.lexer(prepped) : [];
-  } catch {
-    container.textContent = raw;
-    return;
-  }
+  try { tokens = (window.marked && marked.lexer) ? marked.lexer(prepped) : []; }
+  catch { container.textContent = raw; return; }
 
-  // Fetch events for feedback mapping
+  // --- Fetch events for feedback mapping ---
   const events = await jsonFetch(api(`events?since=${row.ts}&category=`)) || [];
   const eventMap = {};
   events.forEach(ev => {
@@ -1083,7 +1142,7 @@ async function openModal(row) {
     eventMap[key] = ev.id;
   });
 
-  // --- group tokens by headings (h1–h4) ---
+  // --- Group tokens by headings ---
   const sections = [];
   let current = { title: null, bodyTokens: [] };
   const flush = () => {
@@ -1096,10 +1155,10 @@ async function openModal(row) {
   }
   flush();
 
-  // --- build UI ---
+  // --- Build UI ---
   container.innerHTML = "";
 
-  // Hero summary
+  // Hero summary (first section if "Summary")
   const first = sections[0];
   if (first && isSummaryTitle(first.title || "")) {
     const hero = document.createElement("div");
@@ -1109,7 +1168,6 @@ async function openModal(row) {
     let heroHtml = "";
     try { heroHtml = marked.parser(first.bodyTokens); }
     catch { heroHtml = `<p>${raw}</p>`; }
-
     hero.innerHTML = `
       <div class="hero-head">${heroIcon}<span>${heroTitle}</span></div>
       <div class="hero-body">${heroHtml}</div>
@@ -1118,7 +1176,7 @@ async function openModal(row) {
     sections.shift();
   }
 
-  // Masonry container
+  // Masonry wrap
   const wrap = document.createElement("div");
   wrap.className = "modal-masonry";
   container.appendChild(wrap);
@@ -1131,10 +1189,12 @@ async function openModal(row) {
     const card = document.createElement("div");
     card.className = `modal-section ${theme}`;
 
+    // Heading
     const h = document.createElement("h3");
     h.innerHTML = `${categoryIcon(t)} ${t}`;
     card.appendChild(h);
 
+    // Body
     const body = document.createElement("div");
     body.className = "section-body";
     let html = "";
@@ -1143,7 +1203,7 @@ async function openModal(row) {
     body.innerHTML = html;
     card.appendChild(body);
 
-    // Optional chart
+    // Optional chart if numbers present
     const plain = body.textContent || "";
     const nums = (plain.match(/-?\d+(?:\.\d+)?/g) || []).map(parseFloat).filter(n => !isNaN(n));
     if (nums.length >= 3) {
@@ -1152,13 +1212,11 @@ async function openModal(row) {
         plain.includes("kWh") ? "kWh" :
         plain.includes("kW")  ? "kW"  :
         /Mb\/?s|Mbps/i.test(plain) ? "Mbps" : "";
-
       const chartBox = document.createElement("div");
       chartBox.className = "section-chart";
       const canvas = document.createElement("canvas");
       chartBox.appendChild(canvas);
       card.appendChild(chartBox);
-
       try {
         const labels = nums.map((_, i) => `${i + 1}`);
         new Chart(canvas.getContext("2d"), {
@@ -1174,15 +1232,12 @@ async function openModal(row) {
       } catch (e) { console.warn("Chart render failed:", e); }
     }
 
-
-    // === Feedback box (event-linked, only for Comfort/Security/Anomalies) ===
+    // Feedback box for event-linked sections
     if (["Comfort","Security","Anomalies"].includes(t)) {
-      // Attach feedback boxes to each <li> or <p> that matches an event body
       const addFeedbackFor = (el) => {
         const text = el.textContent.trim();
-        const eventId = eventMap[text]; // exact match on event body
+        const eventId = eventMap[text];
         if (!eventId) return;
-
         const box = document.createElement("div");
         box.className = "feedback-box mt-2";
         box.innerHTML = `
@@ -1199,22 +1254,21 @@ async function openModal(row) {
           });
           box.innerHTML = "<em>Thanks for your feedback!</em>";
         });
-
         el.appendChild(box);
       };
-
-      // Try to match each bullet/paragraph to an event
       card.querySelectorAll("li, p").forEach(addFeedbackFor);
     }
 
     wrap.appendChild(card);
   });
 
+  // Finalize modal open
   overlay.classList.remove("hidden");
   document.addEventListener("keydown", escClose);
   $("overlayBackdrop").addEventListener("click", closeModal, { once: true });
   $("modalClose").addEventListener("click", closeModal, { once: true });
 }
+
 
 
 

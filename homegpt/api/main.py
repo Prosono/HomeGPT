@@ -27,6 +27,9 @@ from datetime import datetime, timezone
 from statistics import mean
 from typing import Any
 import re
+from pydantic import BaseModel
+from fastapi import HTTPException
+from typing import Optional
 
 import yaml
 from fastapi import FastAPI, Query, Body
@@ -120,6 +123,18 @@ except ImportError:
         def get_analysis(aid: int): return {}
         @staticmethod
         def add_analysis(mode, focus, summary, actions): return {}
+
+    class FollowupRunRequest(BaseModel):
+        analysis_id: int
+        code: str  
+        
+    class EventFeedbackIn(BaseModel):
+        event_id: int | None = None
+        note: str
+        kind: str | None = "context"
+        analysis_id: int | None = None
+        body: str | None = None
+        category: str | None = None              
 
     analyzer = None
 
@@ -618,7 +633,7 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
         gpt = OpenAIClient(model=cfg.get("model"))
         try:
             if mode == "passive":
-                # Snapshot & clear events atomically
+                # ----- Snapshot & clear events -----
                 async with EVENT_LOCK:
                     global EVENT_BYTES, EVENT_UNIQUE_IDS
                     events = EVENT_BUFFER[-EVENT_BUFFER_MAX:]
@@ -627,101 +642,90 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                     EVENT_UNIQUE_IDS.clear()
 
                 if not events:
-                    # no events → skip auto‑analysis
                     return {"summary": "No notable events recorded.", "actions": [], "row": None}
-                else:
-                    # ----- Topology -----
-                    topo = await fetch_topology_snapshot(ha, max_lines=TOPO_MAX_LINES)
 
-                    # ----- Current state (ground truth) -----
-                    all_states = await ha.states()
-                    state_block = pack_states_for_prompt(all_states, max_lines=STATE_MAX_LINES)
+                # ----- Topology -----
+                topo = await fetch_topology_snapshot(ha, max_lines=TOPO_MAX_LINES)
 
-                    # ----- History for ALL entities (last N hours) -----
-                    cfg_hours = int(_load_config().get("history_hours", DEFAULT_HISTORY_HOURS))
-                    now = datetime.now(timezone.utc).replace(microsecond=0)
-                    start = (now - timedelta(hours=cfg_hours)).replace(microsecond=0)
-                
-                    # after you have: events, all_states, start, now
+                # ----- Current states -----
+                all_states = await ha.states()
+                state_block = pack_states_for_prompt(all_states, max_lines=STATE_MAX_LINES)
 
-                    # ---- Build entity list for history ----
-                    entity_ids = [e['entity_id'] for e in events[-10:]]  # last few entity IDs from EVENT_BUFFER
-                    notes = _load_context_memos(entity_ids, category="security")  # call per category if you prefer
-                    if notes:
-                        user += "\n\nKnown context / user notes:\n" + "\n".join(f"- {n}" for n in notes)
+                # ----- History -----
+                cfg_hours = int(cfg.get("history_hours", DEFAULT_HISTORY_HOURS))
+                now = datetime.now(timezone.utc).replace(microsecond=0)
+                start = (now - timedelta(hours=cfg_hours)).replace(microsecond=0)
 
-                    if not entity_ids:
-                        # fallback: take a subset of current states
-                        entity_ids = sorted({s.get("entity_id") for s in all_states if s.get("entity_id")})[:300]
+                entity_ids = [e["entity_id"] for e in events[-10:]]
+                if not entity_ids:
+                    entity_ids = sorted({s.get("entity_id") for s in all_states if s.get("entity_id")})[:300]
 
-                    logger.info("History query (worker): %d ids (first 15): %s", len(entity_ids), entity_ids[:15])
+                logger.info("History query: %d ids (first 15): %s", len(entity_ids), entity_ids[:15])
 
-                    # ---- Fetch history with a permissive fallback ----
+                try:
+                    hist = await ha.history_period(
+                        start.isoformat(timespec="seconds"),
+                        now.isoformat(timespec="seconds"),
+                        entity_ids=entity_ids,
+                        minimal_response=True,
+                        include_start_time_state=True,
+                        significant_changes_only=None,
+                    )
+                except Exception as e:
+                    logger.warning("History fetch failed (first attempt): %s", e)
                     try:
                         hist = await ha.history_period(
                             start.isoformat(timespec="seconds"),
                             now.isoformat(timespec="seconds"),
                             entity_ids=entity_ids,
-                            minimal_response=True,
+                            minimal_response=False,
                             include_start_time_state=True,
-                            significant_changes_only=None,
+                            significant_changes_only=False,
                         )
-                    except Exception as e:
-                        logger.warning("History fetch failed (first attempt): %s", e)
-                        try:
-                            hist = await ha.history_period(
-                                start.isoformat(timespec="seconds"),
-                                now.isoformat(timespec="seconds"),
-                                entity_ids=entity_ids,
-                                minimal_response=False,
-                                include_start_time_state=True,
-                                significant_changes_only=False,   # most permissive
-                            )
-                        except Exception as e2:
-                            logger.warning("History fetch failed (second attempt): %s", e2)
-                            hist = []
+                    except Exception as e2:
+                        logger.warning("History fetch failed (second attempt): %s", e2)
+                        hist = []
 
-                    # ---- Diagnostics: what did we actually get? ----
-                    try:
-                        groups = len(hist) if isinstance(hist, list) else 0
-                        rows = sum(len(g) for g in hist if isinstance(g, list))
-                        logger.info("History fetched for prompt (worker): groups=%d total_rows=%d", groups, rows)
-                    except Exception:
-                        pass
+                try:
+                    groups = len(hist) if isinstance(hist, list) else 0
+                    rows = sum(len(g) for g in hist if isinstance(g, list))
+                    logger.info("History fetched: groups=%d total_rows=%d", groups, rows)
+                except Exception:
+                    pass
 
-                    # ✅ always set history_block
-                    try:
-                        history_block = compress_history_for_prompt(
-                            hist,
-                            now=datetime.now(timezone.utc),
-                            max_lines=int(_load_config().get("history_max_lines", HISTORY_MAX_LINES)),
-                            jitter_sec=int(_load_config().get("history_jitter_sec", 90)),
-                        )
-                    except Exception as e:
-                        logger.warning("History pack failed: %s", e)
-                        history_block = "(history unavailable)"
-                    
-                    # ----- Recent event bullets (use the snapshot we just took) -----
-                    bullets = [
-                        f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
-                        for e in events[-AUTO_ANALYSIS_EVENT_THRESHOLD:]
-                    ]
-                    events_block = "\n".join(bullets) if bullets else "(none)"
-
-                    # ----- Compose user message -----
-                    user = compose_user_prompt(
-                        lang=cfg.get("language", "en"),
-                        hours=cfg_hours,
-                        topo=topo,
-                        state_block=state_block,
-                        history_block=history_block,
-                        events_block=events_block,
+                try:
+                    history_block = compress_history_for_prompt(
+                        hist,
+                        now=datetime.now(timezone.utc),
+                        max_lines=int(cfg.get("history_max_lines", HISTORY_MAX_LINES)),
+                        jitter_sec=int(cfg.get("history_jitter_sec", 90)),
                     )
+                except Exception as e:
+                    logger.warning("History pack failed: %s", e)
+                    history_block = "(history unavailable)"
 
-                    summary = gpt.complete_text(SYSTEM_PASSIVE, user)
-                    actions = []
+                # ----- Event bullets -----
+                bullets = [
+                    f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
+                    for e in events[-AUTO_ANALYSIS_EVENT_THRESHOLD:]
+                ]
+                events_block = "\n".join(bullets) if bullets else "(none)"
+
+                # ----- User prompt -----
+                user = compose_user_prompt(
+                    lang=cfg.get("language", "en"),
+                    hours=cfg_hours,
+                    topo=topo,
+                    state_block=state_block,
+                    history_block=history_block,
+                    events_block=events_block,
+                )
+
+                summary = gpt.complete_text(SYSTEM_PASSIVE, user)
+                actions = []
 
             else:
+                # ----- Active mode -----
                 states = await ha.states()
                 lines = [f"{s['entity_id']}={s['state']}" for s in states[:400]]
                 user = f"Mode: {mode}\nCurrent states (subset):\n" + "\n".join(lines)
@@ -733,34 +737,38 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
             await ha.close()
 
     else:
+        # Fallback (mocked)
         summary = f"Analysis in {mode} mode. Focus: {focus or 'General'}."
         actions = ["light.turn_off living_room", "climate.set_temperature bedroom 20°C"]
 
-    # Persist
+    # ----- Persist -----
     row = db.add_analysis(mode, focus or (f"{trigger} trigger"), summary, json.dumps(actions))
 
-    # homegpt/api/main.py – after inserting events in /api/run
+    # ----- Extract events & follow-ups -----
     if isinstance(row, (list, tuple)):
         row_id, row_ts = row[0], row[1]
+
+        # Events
         events = _extract_events_from_summary(row_id, row_ts, summary)
         if events:
             with db._conn() as c:
                 c.executemany(
                     "INSERT OR IGNORE INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) VALUES (?,?,?,?,?,?)",
-                    events
+                    events,
                 )
                 c.commit()
-        # NEW: extract follow‑ups and persist them
+
+        # Follow-ups
         fups = _extract_followups(row_id, row_ts, summary)
         if fups:
             with db._conn() as c:
                 c.executemany(
                     "INSERT INTO followup_requests (analysis_id, ts, label, code) VALUES (?,?,?,?)",
-                    fups
+                    fups,
                 )
                 c.commit()
 
-    # Notify (nice for auto triggers too)
+    # ----- Notify -----
     if HAVE_REAL:
         try:
             ha_notify = HAClient()
@@ -774,6 +782,7 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
 
     return {"summary": summary, "actions": actions, "row": row}
 
+
 @app.get("/api/followups")
 def get_followups(analysis_id: int):
     with db._conn() as c:
@@ -781,28 +790,41 @@ def get_followups(analysis_id: int):
         return [dict(id=r[0], label=r[1], code=r[2], status=r[3]) for r in rows]
 
 @app.post("/api/followup/run")
-def run_followup():
-    data = request.get_json(force=True) or {}
-    aid  = int(data.get("analysis_id"))
-    code = data.get("code")
-    if not aid or not code: abort(400, "Missing analysis_id or code")
+def run_followup(payload: FollowupRunRequest):
+    aid  = int(payload.analysis_id)
+    code = payload.code
+
     # implement handlers:
     try:
         if code == "list_automations":
-            payload = do_list_automations(aid)  # your implementation
+            payload_out = do_list_automations(aid)  # your implementation
         elif code == "show_energy_timeline":
-            payload = do_energy_timeline(aid)
+            payload_out = do_energy_timeline(aid)
         elif code == "troubleshoot_sensor":
-            payload = do_troubleshoot(aid)
+            payload_out = do_troubleshoot(aid)
         else:
-            abort(400, "Unknown code")
+            raise HTTPException(status_code=400, detail="Unknown code")
+
         with db._conn() as c:
-            c.execute("UPDATE followup_requests SET status='done' WHERE analysis_id=? AND code=?", (aid, code))
-        return {"ok": True, "payload": payload}
-    except Exception:
-        with db._conn() as c:
-            c.execute("UPDATE followup_requests SET status='failed' WHERE analysis_id=? AND code=?", (aid, code))
+            c.execute(
+                "UPDATE followup_requests SET status='done' WHERE analysis_id=? AND code=?",
+                (aid, code),
+            )
+            c.commit()
+
+        return {"ok": True, "payload": payload_out}
+
+    except HTTPException:
+        # already raised above
         raise
+    except Exception as e:
+        with db._conn() as c:
+            c.execute(
+                "UPDATE followup_requests SET status='failed' WHERE analysis_id=? AND code=?",
+                (aid, code),
+            )
+            c.commit()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/run_history")
 async def run_history(hours: int = Query(..., ge=1, le=48)):
@@ -1155,65 +1177,75 @@ def get_history_item(analysis_id: int):
 # POST /api/event_feedback
 # body: { event_id, note, kind? }
 # homegpt/api/main.py – replace post_event_feedback
-@app.post("/api/event_feedback")
-def post_event_feedback():
-    data = request.get_json(force=True) or {}
-    eid  = data.get("event_id")
-    note = (data.get("note") or "").strip()
-    if not note:
-        abort(400, "Missing note")
 
-    # If no event_id, try to resolve by analysis_id and body text
+
+@app.post("/api/event_feedback")
+def post_event_feedback(payload: EventFeedbackIn):
+    note = (payload.note or "").strip()
+    if not note:
+        raise HTTPException(status_code=400, detail="Missing note")
+
+    eid = payload.event_id
+
+    # Try to resolve by analysis_id/body if no event_id
     if not eid:
-        aid     = data.get("analysis_id")
-        body    = (data.get("body") or "").strip()
-        category= (data.get("category") or "").strip()
+        aid = payload.analysis_id
+        body = (payload.body or "").strip()
+        category = (payload.category or "").strip()
         if aid and body:
-            row = db.execute(
-                "SELECT id FROM analysis_events WHERE analysis_id=? AND body=? LIMIT 1",
-                (aid, body)
-            ).fetchone()
-            if row:
-                eid = row[0]
-            else:
-                # Optionally create a new event if none exists yet
-                ent_ids = ",".join(_extract_entity_ids(body))
-                ts = datetime.utcnow().isoformat()
-                with db._conn() as c:
+            with db._conn() as c:
+                row = c.execute(
+                    "SELECT id FROM analysis_events WHERE analysis_id=? AND body=? LIMIT 1",
+                    (aid, body),
+                ).fetchone()
+                if row:
+                    eid = int(row[0])
+                else:
+                    ent_ids = ",".join(_extract_entity_ids(body))
+                    ts = datetime.utcnow().isoformat()
                     c.execute(
                         "INSERT INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) VALUES (?,?,?,?,?,?)",
-                        (aid, ts, category or "generic", body[:140], body, ent_ids)
+                        (aid, ts, category or "generic", body[:140], body, ent_ids),
                     )
-                    eid = c.lastrowid
-        if not eid:
-            abort(400, "Missing event_id or resolvable analysis/body")
+                    eid = int(c.lastrowid)
+                c.commit()
+
+    if not eid:
+        raise HTTPException(status_code=400, detail="Missing event_id or resolvable analysis/body")
 
     ts = datetime.utcnow().isoformat()
-    with db:
-        db.execute(
+    with db._conn() as c:
+        c.execute(
             "INSERT INTO event_feedback (event_id, ts, note, kind, source) VALUES (?,?,?,?,?)",
-            (int(eid), ts, note, data.get("kind", "context"), "user"),
+            (eid, ts, note, payload.kind or "context", "user"),
         )
-    return jsonify({"ok": True})
+        c.commit()
+    return {"ok": True}
 
 
 # GET /api/events?since=ISO&category=security|comfort|...
 @app.get("/api/events")
-def get_events():
+def get_events(
+    since: Optional[str] = Query(None),
+    category: Optional[str] = Query(None)
+):
     q = "SELECT id, analysis_id, ts, category, title, body, entity_ids FROM analysis_events WHERE 1=1"
-    args = []
-    cat = request.args.get("category")
-    if cat:
+    args: list = []
+    if category:
         q += " AND category=?"
-        args.append(cat)
-    since = request.args.get("since")
+        args.append(category)
     if since:
         q += " AND ts>=?"
         args.append(since)
     q += " ORDER BY ts DESC LIMIT 200"
-    rows = db.execute(q, args).fetchall()
-    out = [dict(zip(["id","analysis_id","ts","category","title","body","entity_ids"], r)) for r in rows]
-    return jsonify(out)
+
+    with db._conn() as c:
+        rows = c.execute(q, args).fetchall()
+        out = [
+            dict(zip(["id","analysis_id","ts","category","title","body","entity_ids"], r))
+            for r in rows
+        ]
+    return out
 
 
 @app.get("/api/settings")
