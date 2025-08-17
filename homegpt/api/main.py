@@ -30,6 +30,8 @@ import re
 from pydantic import BaseModel
 from fastapi import HTTPException
 from typing import Optional
+from pydantic import BaseModel
+from fastapi import HTTPException
 
 import yaml
 from fastapi import FastAPI, Query, Body
@@ -122,19 +124,19 @@ except ImportError:
         @staticmethod
         def get_analysis(aid: int): return {}
         @staticmethod
-        def add_analysis(mode, focus, summary, actions): return {}
+        def add_analysis(mode, focus, summary, actions): return {}      
 
     class FollowupRunRequest(BaseModel):
         analysis_id: int
-        code: str  
-        
+        code: str
+
     class EventFeedbackIn(BaseModel):
         event_id: int | None = None
-        note: str
-        kind: str | None = "context"
         analysis_id: int | None = None
-        body: str | None = None
-        category: str | None = None              
+        body: str | None = None         # full event body text (used to resolve when event_id missing)
+        category: str | None = None     # optional, used if we have to create an event
+        note: str
+        kind: str | None = "context"    # context|dismiss|confirm|custom          
 
     analyzer = None
 
@@ -783,45 +785,54 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
     return {"summary": summary, "actions": actions, "row": row}
 
 
+@app.post("/api/feedback")
+def post_feedback_alias(payload: EventFeedbackIn):
+    # delegate to the canonical endpoint
+    return post_event_feedback(payload)
+
 @app.get("/api/followups")
 def get_followups(analysis_id: int):
     with db._conn() as c:
-        rows = c.execute("SELECT id, label, code, status FROM followup_requests WHERE analysis_id=?", (analysis_id,)).fetchall()
+        rows = c.execute(
+            "SELECT id, label, code, status FROM followup_requests WHERE analysis_id=?",
+            (analysis_id,)
+        ).fetchall()
         return [dict(id=r[0], label=r[1], code=r[2], status=r[3]) for r in rows]
 
 @app.post("/api/followup/run")
 def run_followup(payload: FollowupRunRequest):
-    aid  = int(payload.analysis_id)
+    aid = int(payload.analysis_id)
     code = payload.code
+    if not aid or not code:
+        raise HTTPException(status_code=400, detail="Missing analysis_id or code")
 
-    # implement handlers:
     try:
+        # plug in your real handlers:
         if code == "list_automations":
-            payload_out = do_list_automations(aid)  # your implementation
+            payload_out = do_list_automations(aid)     # implement elsewhere
         elif code == "show_energy_timeline":
-            payload_out = do_energy_timeline(aid)
+            payload_out = do_energy_timeline(aid)      # implement elsewhere
         elif code == "troubleshoot_sensor":
-            payload_out = do_troubleshoot(aid)
+            payload_out = do_troubleshoot(aid)         # implement elsewhere
         else:
             raise HTTPException(status_code=400, detail="Unknown code")
 
         with db._conn() as c:
             c.execute(
                 "UPDATE followup_requests SET status='done' WHERE analysis_id=? AND code=?",
-                (aid, code),
+                (aid, code)
             )
             c.commit()
-
         return {"ok": True, "payload": payload_out}
 
     except HTTPException:
-        # already raised above
+        # already meaningful
         raise
     except Exception as e:
         with db._conn() as c:
             c.execute(
                 "UPDATE followup_requests SET status='failed' WHERE analysis_id=? AND code=?",
-                (aid, code),
+                (aid, code)
             )
             c.commit()
         raise HTTPException(status_code=500, detail=str(e))
@@ -1187,47 +1198,48 @@ def post_event_feedback(payload: EventFeedbackIn):
 
     eid = payload.event_id
 
-    # Try to resolve by analysis_id/body if no event_id
+    # If no event_id, try to resolve by analysis_id + body (exact match on body)
     if not eid:
         aid = payload.analysis_id
         body = (payload.body or "").strip()
-        category = (payload.category or "").strip()
         if aid and body:
             with db._conn() as c:
                 row = c.execute(
                     "SELECT id FROM analysis_events WHERE analysis_id=? AND body=? LIMIT 1",
-                    (aid, body),
+                    (aid, body)
                 ).fetchone()
                 if row:
                     eid = int(row[0])
                 else:
+                    # Optionally create a new event row on-the-fly
+                    from datetime import datetime
                     ent_ids = ",".join(_extract_entity_ids(body))
                     ts = datetime.utcnow().isoformat()
                     c.execute(
                         "INSERT INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) VALUES (?,?,?,?,?,?)",
-                        (aid, ts, category or "generic", body[:140], body, ent_ids),
+                        (aid, ts, payload.category or "generic", body[:140], body, ent_ids)
                     )
-                    eid = int(c.lastrowid)
-                c.commit()
-
-    if not eid:
-        raise HTTPException(status_code=400, detail="Missing event_id or resolvable analysis/body")
+                    eid = c.lastrowid
+                    c.commit()
+        if not eid:
+            raise HTTPException(status_code=400, detail="Missing event_id or resolvable analysis/body")
 
     ts = datetime.utcnow().isoformat()
     with db._conn() as c:
         c.execute(
             "INSERT INTO event_feedback (event_id, ts, note, kind, source) VALUES (?,?,?,?,?)",
-            (eid, ts, note, payload.kind or "context", "user"),
+            (int(eid), ts, note, payload.kind or "context", "user"),
         )
         c.commit()
+
     return {"ok": True}
 
 
-# GET /api/events?since=ISO&category=security|comfort|...
 @app.get("/api/events")
 def get_events(
-    since: Optional[str] = Query(None),
-    category: Optional[str] = Query(None)
+    since: str | None = None,
+    category: str | None = None,
+    limit: int = 200
 ):
     q = "SELECT id, analysis_id, ts, category, title, body, entity_ids FROM analysis_events WHERE 1=1"
     args: list = []
@@ -1237,15 +1249,12 @@ def get_events(
     if since:
         q += " AND ts>=?"
         args.append(since)
-    q += " ORDER BY ts DESC LIMIT 200"
+    q += " ORDER BY ts DESC LIMIT ?"
+    args.append(int(limit))
 
     with db._conn() as c:
         rows = c.execute(q, args).fetchall()
-        out = [
-            dict(zip(["id","analysis_id","ts","category","title","body","entity_ids"], r))
-            for r in rows
-        ]
-    return out
+    return [dict(zip(["id","analysis_id","ts","category","title","body","entity_ids"], r)) for r in rows]
 
 
 @app.get("/api/settings")

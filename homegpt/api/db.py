@@ -1,3 +1,4 @@
+# db.py
 from pathlib import Path
 import sqlite3
 from datetime import datetime
@@ -51,8 +52,6 @@ def init_db():
         """)
         c.commit()
 
-        
-
 def add_analysis(mode: str, focus: str, summary: str, actions_json: str):
     ts = datetime.utcnow().isoformat()
     with _conn() as c:
@@ -62,7 +61,6 @@ def add_analysis(mode: str, focus: str, summary: str, actions_json: str):
         )
         c.commit()
         row_id = cur.lastrowid
-        # Return the canonical row shape the UI expects
         return [row_id, ts, mode, focus, summary, actions_json]
 
 def get_analyses(limit: int = 50):
