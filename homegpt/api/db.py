@@ -10,7 +10,7 @@ def _conn():
 
 def init_db():
     with _conn() as c:
-        c.execute("""
+        c.executescript("""
         CREATE TABLE IF NOT EXISTS analyses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts TEXT NOT NULL,
@@ -20,38 +20,34 @@ def init_db():
             actions_json TEXT
         );
 
-        -- new table: analysis_events
         CREATE TABLE IF NOT EXISTS analysis_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            analysis_id INTEGER NOT NULL,         -- FK to your existing row id
-            ts TEXT NOT NULL,                     -- ISO timestamp (analysis ts)
-            category TEXT NOT NULL,               -- security|comfort|energy|anomalies
-            title TEXT,                           -- short label (first sentence/headline)
-            body TEXT,                            -- full text for this event
-            entity_ids TEXT,                      -- comma-separated entity ids extracted, if any
+            analysis_id INTEGER NOT NULL,
+            ts TEXT NOT NULL,
+            category TEXT NOT NULL,
+            title TEXT,
+            body TEXT,
+            entity_ids TEXT,
             UNIQUE(analysis_id, category, title, body)
         );
 
-        -- new table: event_feedback
         CREATE TABLE IF NOT EXISTS event_feedback (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_id INTEGER NOT NULL,            -- FK to analysis_events
+            event_id INTEGER NOT NULL,
             ts TEXT NOT NULL,
-            note TEXT NOT NULL,                   -- user feedback
-            kind TEXT DEFAULT 'context',          -- context|dismiss|confirm|custom
-            source TEXT DEFAULT 'user'            -- user|system
+            note TEXT NOT NULL,
+            kind TEXT DEFAULT 'context',
+            source TEXT DEFAULT 'user'
         );
 
-        -- optional for generic “do X?” offers from the model:
         CREATE TABLE IF NOT EXISTS followup_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             analysis_id INTEGER NOT NULL,
             ts TEXT NOT NULL,
-            label TEXT NOT NULL,                  -- e.g. "List automations that triggered the limit"
-            code TEXT NOT NULL,                   -- machine key, e.g. "list_automations"
-            status TEXT DEFAULT 'pending'         -- pending|done|failed
+            label TEXT NOT NULL,
+            code TEXT NOT NULL,
+            status TEXT DEFAULT 'pending'
         );
-
         """)
         c.commit()
 
