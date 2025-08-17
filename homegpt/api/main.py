@@ -786,9 +786,8 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
 
 
 @app.post("/api/feedback")
-def post_feedback_alias(payload: EventFeedbackIn):
-    # delegate to the canonical endpoint
-    return post_event_feedback(payload)
+async def post_feedback_alias(payload: EventFeedbackIn):
+    return await post_event_feedback(payload)
 
 @app.get("/api/followups")
 def get_followups(analysis_id: int):
