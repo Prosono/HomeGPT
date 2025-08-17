@@ -1268,7 +1268,7 @@ async function openModal(row) {
           await jsonFetch(api("feedback"), {
             method: "POST",
             headers: {"Content-Type":"application/json"},
-            body: JSON.stringify({ event_id: eventId, feedback: txt })
+            body: JSON.stringify({ event_id: eventId, note: txt })
           });
           box.innerHTML = "<em>Thanks for your feedback!</em>";
         });
