@@ -785,9 +785,9 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
     return {"summary": summary, "actions": actions, "row": row}
 
 
-@app.post("/api/feedback")
-async def post_feedback_alias(payload: "EventFeedbackIn"):
-    return await post_event_feedback(payload)
+#@app.post("/api/feedback")
+#async def post_feedback_alias(payload: "EventFeedbackIn"):
+#    return await post_event_feedback(payload) 
 
 @app.get("/api/followups")
 def get_followups(analysis_id: int):
