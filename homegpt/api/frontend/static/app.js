@@ -860,11 +860,7 @@ function openFeedbackDialog({ analysis_id, category = "generic", body = "", even
     await jsonFetch(api("feedback"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        event_id: Number(eventId),      // if you have it
-        note: txt,                      // canonical
-        kind: "context"
-      })
+      body: JSON.stringify(payload)  // <-- use the form payload you built above
     });
       $("fb-result").textContent = "Thanks — saved!";
       setTimeout(()=> dlg.close(), 600);
