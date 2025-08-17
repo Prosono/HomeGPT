@@ -53,3 +53,7 @@ class Settings(BaseModel):
     mode: str
     model: str
     dry_run: bool
+
+class FollowupRunRequest(BaseModel):
+    analysis_id: int
+    code: str    
