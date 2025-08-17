@@ -857,11 +857,15 @@ function openFeedbackDialog({ analysis_id, category = "generic", body = "", even
 
     try {
       // Align with your backend route name:
-      await jsonFetch(api("feedback"), {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify(payload)
-      });
+    await jsonFetch(api("feedback"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        event_id: Number(eventId),      // if you have it
+        note: txt,                      // canonical
+        kind: "context"
+      })
+    });
       $("fb-result").textContent = "Thanks — saved!";
       setTimeout(()=> dlg.close(), 600);
     } catch (err) {

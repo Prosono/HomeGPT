@@ -825,12 +825,24 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
 
 
 @app.post("/api/feedback")
-async def post_feedback_alias(payload: dict = Body(...)):
-    # Accept both {note: "..."} and legacy {feedback: "..."}
-    if not payload.get("note") and payload.get("feedback"):
-        payload["note"] = payload["feedback"]
-    # Optionally accept analysis_id/body when event_id is missing
-    return post_event_feedback(EventFeedbackIn(**payload))
+def post_feedback_alias(payload: dict = Body(...)):
+    """
+    Compatibility endpoint. Accepts either:
+      {event_id, note, kind?}
+    or legacy: {event_id, feedback, kind?}
+    Also supports {analysis_id, body, category, note} when event_id is unknown.
+    """
+    try:
+        if not payload.get("note") and payload.get("feedback"):
+            payload["note"] = payload["feedback"]
+
+        model = EventFeedbackIn(**payload)   # lets Pydantic do validation/aliasing
+        return post_event_feedback(model)    # call the real handler
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error in /api/feedback: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/followups")
 def get_followups(analysis_id: int):
@@ -1252,11 +1264,6 @@ def get_history_item(analysis_id: int):
         logger.warning(f"Unexpected row format in history item: {row}")
         return row
 
-# POST /api/event_feedback
-# body: { event_id, note, kind? }
-# homegpt/api/main.py – replace post_event_feedback
-
-
 @app.post("/api/event_feedback")
 def post_event_feedback(payload: EventFeedbackIn):
     note = (payload.note or "").strip()
@@ -1264,8 +1271,6 @@ def post_event_feedback(payload: EventFeedbackIn):
         raise HTTPException(status_code=400, detail="Missing note")
 
     eid = payload.event_id
-
-    # If no event_id, try to resolve by analysis_id + body (exact match on body)
     if not eid:
         aid = payload.analysis_id
         body = (payload.body or "").strip()
@@ -1278,16 +1283,17 @@ def post_event_feedback(payload: EventFeedbackIn):
                 if row:
                     eid = int(row[0])
                 else:
-                    # Optionally create a new event row on-the-fly
                     from datetime import datetime
                     ent_ids = ",".join(_extract_entity_ids(body))
                     ts = datetime.utcnow().isoformat()
                     c.execute(
-                        "INSERT INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) VALUES (?,?,?,?,?,?)",
-                        (aid, ts, payload.category or "generic", body[:140], body, ent_ids)
+                        "INSERT INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) "
+                        "VALUES (?,?,?,?,?,?)",
+                        (aid, ts, (payload.category or "generic"), body[:140], body, ent_ids)
                     )
                     eid = c.lastrowid
                     c.commit()
+
         if not eid:
             raise HTTPException(status_code=400, detail="Missing event_id or resolvable analysis/body")
 
@@ -1295,7 +1301,7 @@ def post_event_feedback(payload: EventFeedbackIn):
     with db._conn() as c:
         c.execute(
             "INSERT INTO event_feedback (event_id, ts, note, kind, source) VALUES (?,?,?,?,?)",
-            (int(eid), ts, note, payload.kind or "context", "user"),
+            (int(eid), ts, note, (payload.kind or "context"), "user")
         )
         c.commit()
 
