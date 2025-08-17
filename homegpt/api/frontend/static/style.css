@@ -445,3 +445,14 @@ body {
 .hm-cell:hover .hm-tooltip { display: block; }
 
 .hm-cell.highlight { box-shadow: 0 0 0 2px #93c5fd inset; }
+
+/* homegpt/api/frontend/static/style.css */
+
+.feedback-btn {
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+li:hover .feedback-btn,
+p:hover .feedback-btn {
+  opacity: 1;
+}

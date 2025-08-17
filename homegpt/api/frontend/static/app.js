@@ -1051,7 +1051,7 @@ async function runAnalysisNow() {
 }
 
 // ---------- Modal (with Markdown) ----------
-function openModal(row) {
+async function openModal(row) {
   const overlay   = $("detailsOverlay");
   const title     = $("modalTitle");
   const meta      = $("modalMeta");
@@ -1071,13 +1071,12 @@ function openModal(row) {
     ];
     const group = labels.map(_escRe).join("|");
     md = String(md).replace(/\r\n/g, "\n");
-    // lines like "Security", "**Security**", "Actions to take:" -> "### Security"
     const re = new RegExp(String.raw`^\s*(?:\*\*|__)?\s*(${group})\s*(?:\*\*|__)?\s*:?\s*$`, "gmi");
     md = md.replace(re, (_m, lbl) => `### ${lbl}`);
-    // collapse excessive blank lines
     return md.replace(/\n{3,}/g, "\n\n");
   };
 
+  // Followups
   const followups = await jsonFetch(api(`followups?analysis_id=${row.id}`)) || [];
   if (followups.length) {
     const actionsWrap = document.createElement('div');
@@ -1093,7 +1092,6 @@ function openModal(row) {
           headers: {"Content-Type":"application/json"},
           body: JSON.stringify({ analysis_id: row.id, code: f.code })
         });
-        // show payload in the modal
         const pre = document.createElement('pre');
         pre.textContent = JSON.stringify(data.payload, null, 2);
         document.getElementById('modalSummary').appendChild(pre);
@@ -1114,8 +1112,8 @@ function openModal(row) {
     return;
   }
 
+  // Fetch events for feedback mapping
   const events = await jsonFetch(api(`events?since=${row.ts}&category=`)) || [];
-  // index events by (title/body) for matching
   const eventMap = {};
   events.forEach(ev => {
     const key = (ev.body || "").trim();
@@ -1135,57 +1133,10 @@ function openModal(row) {
   }
   flush();
 
-
-  
-  // after you build 'html' for the section body, enhance bullets:
-const tmp = document.createElement("div");
-tmp.innerHTML = html;
-
-// add feedback button to each list item/paragraph
-tmp.querySelectorAll("li, p").forEach(node => {
-  const text = node.textContent.trim();
-  if (!text) return;
-
-  // find a matching event (best-effort by title prefix)
-  // You can fetch once per modal: const events = await jsonFetch(api(`events?since=${row.ts}`));
-  // For simplicity here, post with (analysis_id, category, body_text) to resolve server-side.
-
-
-  
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "chip chip--ghost ml-2";
-  btn.textContent = "Give feedback";
-  btn.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    const note = prompt("Add context or correction for future analyses:");
-    if (!note) return;
-
-    // create or resolve event on the server by fuzzy match
-    await fetch(api("event_feedback"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        // server can resolve to event_id by matching (analysis_id, category, body)
-        analysis_id: row.id || row[0],
-        category: canonicalizeTitle(sec.title || ""),
-        body: text,
-        note
-      })
-    }).catch(console.error);
-    btn.textContent = "Saved ✓";
-  });
-
-  node.appendChild(btn);
-});
-
-body.innerHTML = tmp.innerHTML;
-
-
-  // --- build UI: optional hero + masonry cards ---
+  // --- build UI ---
   container.innerHTML = "";
 
-  // 1) Hero banner (if first section is a "Summary")
+  // Hero summary
   const first = sections[0];
   if (first && isSummaryTitle(first.title || "")) {
     const hero = document.createElement("div");
@@ -1201,15 +1152,15 @@ body.innerHTML = tmp.innerHTML;
       <div class="hero-body">${heroHtml}</div>
     `;
     container.appendChild(hero);
-    sections.shift(); // remaining go to masonry
+    sections.shift();
   }
 
-  // 2) Masonry container
+  // Masonry container
   const wrap = document.createElement("div");
-  wrap.className = "modal-masonry"; // CSS columns → variable-height cards
+  wrap.className = "modal-masonry";
   container.appendChild(wrap);
 
-  // 3) Card per section
+  // Section cards
   sections.forEach((sec, idx) => {
     const t = sec.title || (idx === 0 ? "Details" : `Section ${idx + 1}`);
     const theme = categoryClass(t);
@@ -1229,7 +1180,7 @@ body.innerHTML = tmp.innerHTML;
     body.innerHTML = html;
     card.appendChild(body);
 
-    // Optional: tiny number sparkline
+    // Optional chart
     const plain = body.textContent || "";
     const nums = (plain.match(/-?\d+(?:\.\d+)?/g) || []).map(parseFloat).filter(n => !isNaN(n));
     if (nums.length >= 3) {
@@ -1260,6 +1211,31 @@ body.innerHTML = tmp.innerHTML;
       } catch (e) { console.warn("Chart render failed:", e); }
     }
 
+    // === Feedback box (only for relevant sections like Comfort/Security/Anomalies) ===
+    if (["Comfort","Security","Anomalies"].includes(t)) {
+      const feedbackBox = document.createElement("div");
+      feedbackBox.className = "feedback-box mt-2";
+      feedbackBox.innerHTML = `
+        <textarea class="feedback-text" placeholder="Add feedback about this section..."></textarea>
+        <button class="feedback-submit">Submit Feedback</button>
+      `;
+      feedbackBox.querySelector(".feedback-submit").addEventListener("click", async () => {
+        const txt = feedbackBox.querySelector(".feedback-text").value.trim();
+        if (!txt) return;
+        await jsonFetch(api("feedback"), {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({
+            analysis_id: row.id,
+            section: t,
+            feedback: txt
+          })
+        });
+        feedbackBox.innerHTML = "<em>Thanks for your feedback!</em>";
+      });
+      card.appendChild(feedbackBox);
+    }
+
     wrap.appendChild(card);
   });
 
@@ -1268,6 +1244,7 @@ body.innerHTML = tmp.innerHTML;
   $("overlayBackdrop").addEventListener("click", closeModal, { once: true });
   $("modalClose").addEventListener("click", closeModal, { once: true });
 }
+
 
 
 

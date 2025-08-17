@@ -395,11 +395,6 @@ def _extract_followups(aid: int, ts: str, summary: str):
         rows.append((aid, ts, label[:255], code))
     return rows
 
-    fups = _extract_followups(row_id, row_ts, summary)
-    if fups:
-        with db._conn() as c:
-            c.executemany("INSERT INTO followup_requests (analysis_id, ts, label, code) VALUES (?,?,?,?)", fups)
-            c.commit()
 
 def compose_user_prompt(*, lang: str, hours: int | None, topo: str, state_block: str, history_block: str, events_block: str = "") -> str:
     topo          = clamp_chars(strip_noise(topo), TOPO_MAX_CHARS)
@@ -744,14 +739,24 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
     # Persist
     row = db.add_analysis(mode, focus or (f"{trigger} trigger"), summary, json.dumps(actions))
 
+    # homegpt/api/main.py – after inserting events in /api/run
     if isinstance(row, (list, tuple)):
         row_id, row_ts = row[0], row[1]
         events = _extract_events_from_summary(row_id, row_ts, summary)
         if events:
             with db._conn() as c:
                 c.executemany(
-                    "INSERT OR IGNORE INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT OR IGNORE INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) VALUES (?,?,?,?,?,?)",
                     events
+                )
+                c.commit()
+        # NEW: extract follow‑ups and persist them
+        fups = _extract_followups(row_id, row_ts, summary)
+        if fups:
+            with db._conn() as c:
+                c.executemany(
+                    "INSERT INTO followup_requests (analysis_id, ts, label, code) VALUES (?,?,?,?)",
+                    fups
                 )
                 c.commit()
 
@@ -873,14 +878,24 @@ async def run_history(hours: int = Query(..., ge=1, le=48)):
         # Persist just like /api/run
         row = db.add_analysis(mode, focus, summary, json.dumps(actions))
 
+        # homegpt/api/main.py – after inserting events in /api/run
         if isinstance(row, (list, tuple)):
             row_id, row_ts = row[0], row[1]
             events = _extract_events_from_summary(row_id, row_ts, summary)
             if events:
                 with db._conn() as c:
                     c.executemany(
-                        "INSERT OR IGNORE INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) VALUES (?, ?, ?, ?, ?, ?)",
+                        "INSERT OR IGNORE INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) VALUES (?,?,?,?,?,?)",
                         events
+                    )
+                    c.commit()
+            # NEW: extract follow‑ups and persist them
+            fups = _extract_followups(row_id, row_ts, summary)
+            if fups:
+                with db._conn() as c:
+                    c.executemany(
+                        "INSERT INTO followup_requests (analysis_id, ts, label, code) VALUES (?,?,?,?)",
+                        fups
                     )
                     c.commit()
 
@@ -1139,19 +1154,48 @@ def get_history_item(analysis_id: int):
 
 # POST /api/event_feedback
 # body: { event_id, note, kind? }
+# homegpt/api/main.py – replace post_event_feedback
 @app.post("/api/event_feedback")
 def post_event_feedback():
     data = request.get_json(force=True) or {}
-    eid  = int(data.get("event_id"))
+    eid  = data.get("event_id")
     note = (data.get("note") or "").strip()
-    kind = (data.get("kind") or "context").strip()
-    if not eid or not note: abort(400, "Missing event_id or note")
+    if not note:
+        abort(400, "Missing note")
+
+    # If no event_id, try to resolve by analysis_id and body text
+    if not eid:
+        aid     = data.get("analysis_id")
+        body    = (data.get("body") or "").strip()
+        category= (data.get("category") or "").strip()
+        if aid and body:
+            row = db.execute(
+                "SELECT id FROM analysis_events WHERE analysis_id=? AND body=? LIMIT 1",
+                (aid, body)
+            ).fetchone()
+            if row:
+                eid = row[0]
+            else:
+                # Optionally create a new event if none exists yet
+                ent_ids = ",".join(_extract_entity_ids(body))
+                ts = datetime.utcnow().isoformat()
+                with db._conn() as c:
+                    c.execute(
+                        "INSERT INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) VALUES (?,?,?,?,?,?)",
+                        (aid, ts, category or "generic", body[:140], body, ent_ids)
+                    )
+                    eid = c.lastrowid
+        if not eid:
+            abort(400, "Missing event_id or resolvable analysis/body")
 
     ts = datetime.utcnow().isoformat()
     with db:
-        db.execute("INSERT INTO event_feedback (event_id, ts, note, kind, source) VALUES (?,?,?,?,?)",
-                   (eid, ts, note, kind, "user"))
+        db.execute(
+            "INSERT INTO event_feedback (event_id, ts, note, kind, source) VALUES (?,?,?,?,?)",
+            (int(eid), ts, note, data.get("kind", "context"), "user"),
+        )
     return jsonify({"ok": True})
+
 
 # GET /api/events?since=ISO&category=security|comfort|...
 @app.get("/api/events")
