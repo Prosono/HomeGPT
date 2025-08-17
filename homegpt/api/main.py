@@ -252,6 +252,7 @@ app.add_middleware(
 )
 
 db.init_db()
+_ensure_schema()  # ← add this
 
 # ---------------- Ingress UI ----------------
 @app.get("/")
@@ -388,6 +389,51 @@ async def _fetch_history_all_entities(
         pass
 
     return combined
+
+def _ensure_schema():
+    with db._conn() as c:
+        # events extracted from summaries
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS analysis_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            analysis_id INTEGER NOT NULL,
+            ts TEXT NOT NULL,
+            category TEXT,
+            title TEXT,
+            body TEXT,
+            entity_ids TEXT
+        );
+        """)
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_analysis_events_aid_body ON analysis_events(analysis_id, body);")
+        c.execute("CREATE INDEX IF NOT EXISTS ix_analysis_events_analysis_id ON analysis_events(analysis_id);")
+        c.execute("CREATE INDEX IF NOT EXISTS ix_analysis_events_ts ON analysis_events(ts);")
+
+        # user feedback on events
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS event_feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id INTEGER NOT NULL,
+            ts TEXT NOT NULL,
+            note TEXT NOT NULL,
+            kind TEXT,
+            source TEXT
+        );
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS ix_event_feedback_event_id ON event_feedback(event_id);")
+
+        # follow-ups (buttons beneath the modal)
+        c.execute("""
+        CREATE TABLE IF NOT EXISTS followup_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            analysis_id INTEGER NOT NULL,
+            ts TEXT NOT NULL,
+            label TEXT NOT NULL,
+            code TEXT NOT NULL,
+            status TEXT DEFAULT 'pending'
+        );
+        """)
+        c.execute("CREATE INDEX IF NOT EXISTS ix_followup_requests_analysis_id ON followup_requests(analysis_id);")
+        c.commit()
 
 def _load_context_memos(entity_ids: list[str], category: str):
     out = []
