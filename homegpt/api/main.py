@@ -1293,16 +1293,25 @@ def post_event_feedback(payload: EventFeedbackIn):
                     )
                     eid = c.lastrowid
                     c.commit()
-
         if not eid:
             raise HTTPException(status_code=400, detail="Missing event_id or resolvable analysis/body")
 
     ts = datetime.utcnow().isoformat()
     with db._conn() as c:
-        c.execute(
-            "INSERT INTO event_feedback (event_id, ts, note, kind, source) VALUES (?,?,?,?,?)",
-            (int(eid), ts, note, (payload.kind or "context"), "user")
-        )
+        # old schema compatibility: try with source, fall back if column is missing
+        try:
+            c.execute(
+                "INSERT INTO event_feedback (event_id, ts, note, kind, source) VALUES (?,?,?,?,?)",
+                (int(eid), ts, note, (payload.kind or "context"), "user")
+            )
+        except Exception as ex:
+            if "no column named source" in str(ex).lower():
+                c.execute(
+                    "INSERT INTO event_feedback (event_id, ts, note, kind) VALUES (?,?,?,?)",
+                    (int(eid), ts, note, (payload.kind or "context"))
+                )
+            else:
+                raise
         c.commit()
 
     return {"ok": True}
