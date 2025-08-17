@@ -33,6 +33,7 @@ from typing import Optional
 from pydantic import BaseModel
 from fastapi import Query
 from typing import Optional, List
+from fastapi import Body
 
 
 import yaml
@@ -824,8 +825,12 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
 
 
 @app.post("/api/feedback")
-async def post_feedback_alias(payload: "EventFeedbackIn"):
-    return post_event_feedback(payload)
+async def post_feedback_alias(payload: dict = Body(...)):
+    # Accept both {note: "..."} and legacy {feedback: "..."}
+    if not payload.get("note") and payload.get("feedback"):
+        payload["note"] = payload["feedback"]
+    # Optionally accept analysis_id/body when event_id is missing
+    return post_event_feedback(EventFeedbackIn(**payload))
 
 @app.get("/api/followups")
 def get_followups(analysis_id: int):

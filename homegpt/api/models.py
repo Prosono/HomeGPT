@@ -7,7 +7,7 @@ frontend don't fail if the caller omits a mode.  The handler in
 configuration.
 """
 
-from pydantic import BaseModel
+from pydantic import BaseModel, root_validator
 from typing import Optional, List
 
 
@@ -63,5 +63,12 @@ class EventFeedbackIn(BaseModel):
     analysis_id: Optional[int] = None
     body: Optional[str] = None
     category: Optional[str] = None
-    note: str
-    kind: Optional[str] = "context"    
+    note: Optional[str] = None           # canonical
+    kind: Optional[str] = "context"
+
+    # Accept legacy 'feedback' as an alias for 'note'
+    @root_validator(pre=True)
+    def _map_feedback_alias(cls, v):
+        if not v.get("note") and v.get("feedback"):
+            v["note"] = v["feedback"]
+        return v
