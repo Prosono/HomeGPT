@@ -451,15 +451,7 @@ function buildHeatmapData(rows, hoursBack = 24) {
 
   return { hours, buckets, meta };
 }
-// intensity → color (cool to warm)
-function cellColor(v, vmax) {
-  if (!vmax) return "#0f172a";
-  const t = Math.max(0, Math.min(1, v / vmax));
-  // 220°(blue) → 40°(amber) hue sweep
-  const hue = 220 - 180 * Math.pow(t, 0.8);
-  const light = 18 + 42 * Math.pow(t, 0.6);
-  return `hsl(${hue} 85% ${light}%)`;
-}
+
 
 function cellColor(v, vmax) {
   if (!vmax) return "#0f172a";
@@ -574,35 +566,6 @@ function initHeatmapFilters(rows) {
   });
 }
 
-
-// Return map: { hourIso: { security: n, comfort: n, energy: n, anomalies: n }, meta: {hourIso:[rows]} }
-function buildHeatmapData(rows) {
-  const buckets = {};
-  const meta = {}; // keep rows per hour for click-through
-  const cats = ["security","comfort","energy","anomalies"];
-
-  rows.forEach(r => {
-    const row = Array.isArray(r) ? { ts: r[1], summary: r[4] } : r;
-    const ts = new Date(row.ts || Date.now());
-    const hourIso = new Date(ts.getFullYear(), ts.getMonth(), ts.getDate(), ts.getHours()).toISOString();
-
-    if (!buckets[hourIso]) buckets[hourIso] = { security:0, comfort:0, energy:0, anomalies:0 };
-    if (!meta[hourIso]) meta[hourIso] = [];
-    meta[hourIso].push(row);
-
-    const sections = splitSections(row.summary || "");
-    // sum per canonical category
-    for (const sec of sections) {
-      const key = canonicalizeTitle(sec.title || "");
-      if (!cats.includes(key)) continue;
-      buckets[hourIso][key] += scoreSection(sec.bodyTokens);
-    }
-  });
-
-  // normalize hours ascending
-  const hours = Object.keys(buckets).sort();
-  return { hours, buckets, meta };
-}
 
 
 async function loadHistory() {
@@ -1211,29 +1174,37 @@ async function openModal(row) {
       } catch (e) { console.warn("Chart render failed:", e); }
     }
 
-    // === Feedback box (only for relevant sections like Comfort/Security/Anomalies) ===
+
+    // === Feedback box (event-linked, only for Comfort/Security/Anomalies) ===
     if (["Comfort","Security","Anomalies"].includes(t)) {
-      const feedbackBox = document.createElement("div");
-      feedbackBox.className = "feedback-box mt-2";
-      feedbackBox.innerHTML = `
-        <textarea class="feedback-text" placeholder="Add feedback about this section..."></textarea>
-        <button class="feedback-submit">Submit Feedback</button>
-      `;
-      feedbackBox.querySelector(".feedback-submit").addEventListener("click", async () => {
-        const txt = feedbackBox.querySelector(".feedback-text").value.trim();
-        if (!txt) return;
-        await jsonFetch(api("feedback"), {
-          method: "POST",
-          headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({
-            analysis_id: row.id,
-            section: t,
-            feedback: txt
-          })
+      // Attach feedback boxes to each <li> or <p> that matches an event body
+      const addFeedbackFor = (el) => {
+        const text = el.textContent.trim();
+        const eventId = eventMap[text]; // exact match on event body
+        if (!eventId) return;
+
+        const box = document.createElement("div");
+        box.className = "feedback-box mt-2";
+        box.innerHTML = `
+          <textarea class="feedback-text" placeholder="Add feedback about this event..."></textarea>
+          <button class="feedback-submit">Submit Feedback</button>
+        `;
+        box.querySelector(".feedback-submit").addEventListener("click", async () => {
+          const txt = box.querySelector(".feedback-text").value.trim();
+          if (!txt) return;
+          await jsonFetch(api("feedback"), {
+            method: "POST",
+            headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({ event_id: eventId, feedback: txt })
+          });
+          box.innerHTML = "<em>Thanks for your feedback!</em>";
         });
-        feedbackBox.innerHTML = "<em>Thanks for your feedback!</em>";
-      });
-      card.appendChild(feedbackBox);
+
+        el.appendChild(box);
+      };
+
+      // Try to match each bullet/paragraph to an event
+      card.querySelectorAll("li, p").forEach(addFeedbackFor);
     }
 
     wrap.appendChild(card);
@@ -1263,7 +1234,7 @@ function init() {
   setInterval(() => {
     loadStatus().catch(console.error);
     loadHistory().catch(console.error);
-  }, 10000);
+  }, 100000);
 }
 
 if (document.readyState === "loading") {
