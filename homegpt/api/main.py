@@ -32,6 +32,8 @@ from fastapi import HTTPException
 from typing import Optional
 from pydantic import BaseModel
 from fastapi import Query
+from typing import Optional, List
+
 
 import yaml
 from fastapi import FastAPI, Query, Body
@@ -94,58 +96,57 @@ _analysis_in_progress = asyncio.Event()
 _analysis_in_progress.clear()
 _last_auto_run_ts: float | None = None
 from datetime import datetime, timezone, timedelta
+
 # Import DB, models, analyzer
 try:
     from .models import AnalysisRequest, Settings, FollowupRunRequest, EventFeedbackIn
     from . import db, analyzer
 except ImportError:
-    # Fallback to absolute package path (e.g., when launched differently)
-    from homegpt.api.models import AnalysisRequest, Settings, FollowupRunRequest, EventFeedbackIn
-    from homegpt.api import db, analyzer
-except Exception:
-    # Fallback: minimal local definitions so routes always have types
-    class AnalysisRequest(BaseModel):
-        mode: str | None = None
-        focus: str | None = None
+    try:
+        from homegpt.api.models import AnalysisRequest, Settings, FollowupRunRequest, EventFeedbackIn
+        from homegpt.api import db, analyzer
+    except ImportError:
+        # real fallback used ONLY if both imports fail
+        class AnalysisRequest(BaseModel):
+            mode: str | None = None
+            focus: str | None = None
 
-    class Settings(BaseModel):
-        openai_api_key: str | None = None
-        model: str | None = None
-        mode: str | None = None
-        summarize_time: str | None = None
-        control_allowlist: list[str] | None = None
-        max_actions_per_hour: int | None = None
-        dry_run: bool | None = None
-        log_level: str | None = None
-        language: str | None = None
+        class Settings(BaseModel):
+            openai_api_key: str | None = None
+            model: str | None = None
+            mode: str | None = None
+            summarize_time: str | None = None
+            control_allowlist: list[str] | None = None
+            max_actions_per_hour: int | None = None
+            dry_run: bool | None = None
+            log_level: str | None = None
+            language: str | None = None
 
-    class FollowupRunRequest(BaseModel):
-        analysis_id: int
-        code: str
+        class FollowupRunRequest(BaseModel):
+            analysis_id: int
+            code: str
 
-    class EventFeedbackIn(BaseModel):
-        event_id: int | None = None
-        analysis_id: int | None = None
-        body: str | None = None
-        category: str | None = None
-        note: str
-        kind: str | None = "context"   # context|dismiss|confirm|custom
+        class EventFeedbackIn(BaseModel):
+            event_id: int | None = None
+            analysis_id: int | None = None
+            body: str | None = None
+            category: str | None = None
+            note: str
+            kind: str | None = "context"
 
-    # Lightweight db stub only if your real import failed (keeps module importable)
-    class db:  # type: ignore
-        @staticmethod
-        def init_db() -> None: ...
-        @staticmethod
-        def get_analyses(limit: int): return []
-        @staticmethod
-        def get_analysis(aid: int): return {}
-        @staticmethod
-        def add_analysis(mode, focus, summary, actions): return {}
-        @staticmethod
-        def _conn():  # only used by feedback/events paths
-            raise RuntimeError("db._conn not available in fallback")
+        class db:  # type: ignore
+            @staticmethod
+            def init_db() -> None: ...
+            @staticmethod
+            def get_analyses(limit: int): return []
+            @staticmethod
+            def get_analysis(aid: int): return {}
+            @staticmethod
+            def add_analysis(mode, focus, summary, actions): return {}
+            @staticmethod
+            def _conn(): raise RuntimeError("db._conn not available in fallback")
 
-    analyzer = None
+        analyzer = None
 
 def _extract_entity_ids(text: str) -> list[str]:
     """Extract Home Assistant entity IDs from a string."""
