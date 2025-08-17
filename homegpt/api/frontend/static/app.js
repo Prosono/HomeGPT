@@ -857,7 +857,7 @@ function openFeedbackDialog({ analysis_id, category = "generic", body = "", even
 
     try {
       // Align with your backend route name:
-      await jsonFetch(api("event_feedback"), {
+      await jsonFetch(api("feedback"), {
         method: "POST",
         headers: {"Content-Type":"application/json"},
         body: JSON.stringify(payload)
@@ -1039,6 +1039,20 @@ async function toggleMode() {
   const next = cur === "active" ? "passive" : "active";
   await jsonFetch(api(`mode?mode=${encodeURIComponent(next)}`), { method: "POST" });
   await loadStatus();
+}
+
+async function loadEvents() {
+  const since = new Date(Date.now() - 24*3600*1000).toISOString();
+  const rows = await jsonFetch(api(`events?since=${encodeURIComponent(since)}&limit=200`)) || [];
+  const box = document.getElementById("eventsList");
+  if (!box) return;
+  box.innerHTML = rows.map(ev => `
+    <div class="event-row">
+      <span class="event-ts">${new Date(ev.ts).toLocaleString()}</span>
+      <span class="event-cat">${ev.category}</span>
+      <span class="event-body">${ev.title || ev.body}</span>
+    </div>
+  `).join("");
 }
 
 
@@ -1280,14 +1294,22 @@ function closeModal() {
 }
 
 // ---------- Init ----------
+// ---------- Init ----------
 function init() {
+  // wire up buttons
   $("toggleMode").addEventListener("click", toggleMode);
   $("runAnalysis").addEventListener("click", runAnalysisNow);
+
+  // initial loads
   loadStatus().catch(console.error);
   loadHistory().catch(console.error);
+  loadEvents().catch(console.error);   // 👈 new – load events into UI
+
+  // poll periodically
   setInterval(() => {
     loadStatus().catch(console.error);
     loadHistory().catch(console.error);
+    loadEvents().catch(console.error); // 👈 keep events fresh
   }, 100000);
 }
 

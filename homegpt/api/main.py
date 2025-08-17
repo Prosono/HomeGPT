@@ -765,12 +765,11 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
             with db._conn() as c:
                 c.executemany(
                     "INSERT OR IGNORE INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) VALUES (?,?,?,?,?,?)",
-                    events,
+                    events
                 )
                 c.commit()
-
-        # Follow-ups
         fups = _extract_followups(row_id, row_ts, summary)
+
         if fups:
             with db._conn() as c:
                 c.executemany(
@@ -1107,6 +1106,31 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
 
         # Persist the analysis
         row = db.add_analysis(mode, focus, summary, json.dumps(actions))
+
+
+        # Extract events + followups, same as run_history
+        if isinstance(row, (list, tuple)):
+            row_id, row_ts = row[0], row[1]
+
+            # Events
+            events = _extract_events_from_summary(row_id, row_ts, summary)
+            if events:
+                with db._conn() as c:
+                    c.executemany(
+                        "INSERT OR IGNORE INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) VALUES (?,?,?,?,?,?)",
+                        events
+                    )
+                    c.commit()
+
+            # Followups
+            fups = _extract_followups(row_id, row_ts, summary)
+            if fups:
+                with db._conn() as c:
+                    c.executemany(
+                        "INSERT INTO followup_requests (analysis_id, ts, label, code) VALUES (?,?,?,?)",
+                        fups
+                    )
+                    c.commit()
 
         # Notify HA so the result is visible immediately
         if HAVE_REAL:
