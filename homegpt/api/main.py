@@ -786,7 +786,7 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
 
 
 @app.post("/api/feedback")
-async def post_feedback_alias(payload: EventFeedbackIn):
+async def post_feedback_alias(payload: "EventFeedbackIn"):
     return await post_event_feedback(payload)
 
 @app.get("/api/followups")
