@@ -57,3 +57,11 @@ class Settings(BaseModel):
 class FollowupRunRequest(BaseModel):
     analysis_id: int
     code: str    
+
+class EventFeedbackIn(BaseModel):
+    event_id: Optional[int] = None
+    analysis_id: Optional[int] = None
+    body: Optional[str] = None
+    category: Optional[str] = None
+    note: str
+    kind: Optional[str] = "context"    

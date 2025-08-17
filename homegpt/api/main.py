@@ -100,12 +100,20 @@ from datetime import datetime, timezone, timedelta
 # Import DB, models, analyzer
 try:
     from .models import AnalysisRequest, Settings, FollowupRunRequest, EventFeedbackIn
-    from . import db, analyzer
 except ImportError:
-    try:
-        from homegpt.api.models import AnalysisRequest, Settings, FollowupRunRequest, EventFeedbackIn
-        from homegpt.api import db, analyzer
-    except ImportError:
+    from homegpt.api.models import AnalysisRequest, Settings, FollowupRunRequest, EventFeedbackIn
+
+try:
+    from . import db
+except ImportError:
+    from homegpt.api import db
+
+# analyzer is optional; import if present
+try:
+    from . import analyzer  # or: from homegpt.api import analyzer
+except Exception:
+    analyzer = None
+    
         # real fallback used ONLY if both imports fail
         class AnalysisRequest(BaseModel):
             mode: str | None = None

@@ -8,7 +8,8 @@ This package handles:
 """
 
 from . import db
-from .models import AnalysisRequest, Settings
+from .models import AnalysisRequest, Settings, FollowupRunRequest, EventFeedbackIn
+
 
 # Initialize database on package import
 db.init_db()
