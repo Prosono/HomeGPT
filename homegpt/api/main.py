@@ -96,13 +96,11 @@ _last_auto_run_ts: float | None = None
 from datetime import datetime, timezone, timedelta
 # Import DB, models, analyzer
 try:
-    # Try to import *all* models we use in route type hints.
-    from homegpt.api.models import (
-        AnalysisRequest,
-        Settings,
-        FollowupRunRequest,
-        EventFeedbackIn,
-    )
+    from .models import AnalysisRequest, Settings, FollowupRunRequest, EventFeedbackIn
+    from . import db, analyzer
+except ImportError:
+    # Fallback to absolute package path (e.g., when launched differently)
+    from homegpt.api.models import AnalysisRequest, Settings, FollowupRunRequest, EventFeedbackIn
     from homegpt.api import db, analyzer
 except Exception:
     # Fallback: minimal local definitions so routes always have types
@@ -793,9 +791,9 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
     return {"summary": summary, "actions": actions, "row": row}
 
 
-#@app.post("/api/feedback")
-#async def post_feedback_alias(payload: "EventFeedbackIn"):
-#    return await post_event_feedback(payload) 
+@app.post("/api/feedback")
+async def post_feedback_alias(payload: "EventFeedbackIn"):
+    return post_event_feedback(payload)
 
 @app.get("/api/followups")
 def get_followups(analysis_id: int):
