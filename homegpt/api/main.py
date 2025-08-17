@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from fastapi import HTTPException
 from typing import Optional
 from pydantic import BaseModel
-
+from fastapi import Query
 
 import yaml
 from fastapi import FastAPI, Query, Body
@@ -1267,13 +1267,29 @@ def post_event_feedback(payload: EventFeedbackIn):
     return {"ok": True}
 
 
+
 @app.get("/api/events")
 def get_events(
-    since: str | None = None,
-    category: str | None = None,
-    limit: int = 200
+    since: Optional[str] = Query(None, description="ISO timestamp; 'Z' allowed"),
+    category: Optional[str] = Query(None),
+    limit: int = Query(200, ge=1, le=1000),
 ):
-    q = "SELECT id, analysis_id, ts, category, title, body, entity_ids FROM analysis_events WHERE 1=1"
+    # Normalize 'since' to the same format we store in SQLite (naive ISO)
+    if since:
+        try:
+            s = since.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            since = dt.isoformat(timespec="seconds")
+        except Exception:
+            # If it's garbage, ignore the filter instead of 500-ing
+            since = None
+
+    q = (
+        "SELECT id, analysis_id, ts, category, title, body, entity_ids "
+        "FROM analysis_events WHERE 1=1"
+    )
     args: list = []
     if category:
         q += " AND category=?"
@@ -1284,10 +1300,14 @@ def get_events(
     q += " ORDER BY ts DESC LIMIT ?"
     args.append(int(limit))
 
-    with db._conn() as c:
-        rows = c.execute(q, args).fetchall()
-    return [dict(zip(["id","analysis_id","ts","category","title","body","entity_ids"], r)) for r in rows]
-
+    try:
+        with db._conn() as c:
+            rows = c.execute(q, args).fetchall()
+        keys = ["id","analysis_id","ts","category","title","body","entity_ids"]
+        return [dict(zip(keys, r)) for r in rows]
+    except Exception as e:
+        logger.exception("Error in /api/events: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to fetch events")
 
 @app.get("/api/settings")
 def get_settings():
