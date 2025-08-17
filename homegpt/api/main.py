@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from fastapi import HTTPException
 from typing import Optional
 from pydantic import BaseModel
-from fastapi import HTTPException
+
 
 import yaml
 from fastapi import FastAPI, Query, Body
@@ -96,16 +96,21 @@ _last_auto_run_ts: float | None = None
 from datetime import datetime, timezone, timedelta
 # Import DB, models, analyzer
 try:
-    from homegpt.api.models import AnalysisRequest, Settings
+    # Try to import *all* models we use in route type hints.
+    from homegpt.api.models import (
+        AnalysisRequest,
+        Settings,
+        FollowupRunRequest,
+        EventFeedbackIn,
+    )
     from homegpt.api import db, analyzer
-except ImportError:
-    from pydantic import BaseModel  # type: ignore
-
-    class AnalysisRequest(BaseModel):  # type: ignore
+except Exception:
+    # Fallback: minimal local definitions so routes always have types
+    class AnalysisRequest(BaseModel):
         mode: str | None = None
         focus: str | None = None
 
-    class Settings(BaseModel):  # type: ignore
+    class Settings(BaseModel):
         openai_api_key: str | None = None
         model: str | None = None
         mode: str | None = None
@@ -116,6 +121,19 @@ except ImportError:
         log_level: str | None = None
         language: str | None = None
 
+    class FollowupRunRequest(BaseModel):
+        analysis_id: int
+        code: str
+
+    class EventFeedbackIn(BaseModel):
+        event_id: int | None = None
+        analysis_id: int | None = None
+        body: str | None = None
+        category: str | None = None
+        note: str
+        kind: str | None = "context"   # context|dismiss|confirm|custom
+
+    # Lightweight db stub only if your real import failed (keeps module importable)
     class db:  # type: ignore
         @staticmethod
         def init_db() -> None: ...
@@ -124,19 +142,10 @@ except ImportError:
         @staticmethod
         def get_analysis(aid: int): return {}
         @staticmethod
-        def add_analysis(mode, focus, summary, actions): return {}      
-
-    class FollowupRunRequest(BaseModel):
-        analysis_id: int
-        code: str
-
-    class EventFeedbackIn(BaseModel):
-        event_id: int | None = None
-        analysis_id: int | None = None
-        body: str | None = None         # full event body text (used to resolve when event_id missing)
-        category: str | None = None     # optional, used if we have to create an event
-        note: str
-        kind: str | None = "context"    # context|dismiss|confirm|custom          
+        def add_analysis(mode, focus, summary, actions): return {}
+        @staticmethod
+        def _conn():  # only used by feedback/events paths
+            raise RuntimeError("db._conn not available in fallback")
 
     analyzer = None
 
