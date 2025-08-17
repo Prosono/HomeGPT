@@ -1078,6 +1078,31 @@ function openModal(row) {
     return md.replace(/\n{3,}/g, "\n\n");
   };
 
+  const followups = await jsonFetch(api(`followups?analysis_id=${row.id}`)) || [];
+  if (followups.length) {
+    const actionsWrap = document.createElement('div');
+    actionsWrap.className = 'followup-actions flex gap-2 mt-2';
+    followups.forEach(f => {
+      const b = document.createElement('button');
+      b.className = 'chip';
+      b.textContent = f.label;
+      b.addEventListener('click', async () => {
+        b.disabled = true;
+        const data = await jsonFetch(api("followup/run"), {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify({ analysis_id: row.id, code: f.code })
+        });
+        // show payload in the modal
+        const pre = document.createElement('pre');
+        pre.textContent = JSON.stringify(data.payload, null, 2);
+        document.getElementById('modalSummary').appendChild(pre);
+      });
+      actionsWrap.appendChild(b);
+    });
+    container.appendChild(actionsWrap);
+  }
+
   const prepped = coerceHeadings(raw);
 
   // --- tokenize with Marked ---
@@ -1088,6 +1113,14 @@ function openModal(row) {
     container.textContent = raw;
     return;
   }
+
+  const events = await jsonFetch(api(`events?since=${row.ts}&category=`)) || [];
+  // index events by (title/body) for matching
+  const eventMap = {};
+  events.forEach(ev => {
+    const key = (ev.body || "").trim();
+    eventMap[key] = ev.id;
+  });
 
   // --- group tokens by headings (h1–h4) ---
   const sections = [];
@@ -1102,6 +1135,8 @@ function openModal(row) {
   }
   flush();
 
+
+  
   // after you build 'html' for the section body, enhance bullets:
 const tmp = document.createElement("div");
 tmp.innerHTML = html;
@@ -1115,6 +1150,8 @@ tmp.querySelectorAll("li, p").forEach(node => {
   // You can fetch once per modal: const events = await jsonFetch(api(`events?since=${row.ts}`));
   // For simplicity here, post with (analysis_id, category, body_text) to resolve server-side.
 
+
+  
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "chip chip--ghost ml-2";

@@ -123,6 +123,39 @@ except ImportError:
 
     analyzer = None
 
+def _extract_entity_ids(text: str) -> list[str]:
+    """Extract Home Assistant entity IDs from a string."""
+    pattern = r'\b(?:sensor|switch|light|climate|lock|binary_sensor|device_tracker)\.[a-zA-Z0-9_]+\b'
+    return list(dict.fromkeys(re.findall(pattern, text)))
+
+def _extract_events_from_summary(aid: int, ts: str, summary: str):
+    """
+    Split a GPT summary into per‑category events.
+    Each bullet or paragraph under Security/Comfort/Energy/Anomalies becomes its own row.
+    """
+    events = []
+    # Split the summary by markdown headings (### Security, etc.)
+    blocks = re.split(r'(?im)^###\s+', summary)
+    titles = re.findall(r'(?im)^###\s+(.+)$', summary)
+    for i, block in enumerate(blocks[1:]):
+        heading = (titles[i] or "").strip().lower()
+        if   'security'  in heading: cat = 'security'
+        elif 'comfort'   in heading: cat = 'comfort'
+        elif 'energy'    in heading: cat = 'energy'
+        elif 'anomal'    in heading: cat = 'anomalies'
+        else:
+            continue
+        # split on bullets or paragraphs
+        parts = re.split(r'(?m)^\s*[-•]\s+|^\s*$', block)
+        parts = [p.strip() for p in parts if p.strip()]
+        if not parts:
+            parts = [block.strip()]
+        for p in parts:
+            title = p.split('. ')[0][:140]
+            ent_ids = ','.join(_extract_entity_ids(p))
+            events.append((aid, ts, cat, title, p, ent_ids))
+    return events
+
 # Cache the local tz once
 _LOCAL_TZ: ZoneInfo | None = None
 def _get_local_tz() -> ZoneInfo:
@@ -303,6 +336,18 @@ async def _fetch_history_all_entities(
 
     return combined
 
+def _load_context_memos(entity_ids: list[str], category: str):
+    out = []
+    with db._conn() as c:
+        # entity-specific memos
+        if entity_ids:
+            likes = [f"%{e}%" for e in entity_ids]
+            q = "SELECT ef.note FROM event_feedback ef JOIN analysis_events ev ON ev.id=ef.event_id WHERE " + " OR ".join(["ev.entity_ids LIKE ?"]*len(likes)) + " ORDER BY ef.ts DESC LIMIT 10"
+            out += [r[0] for r in c.execute(q, likes).fetchall()]
+        # generic category memos
+        q2 = "SELECT ef.note FROM event_feedback ef JOIN analysis_events ev ON ev.id=ef.event_id WHERE (ev.entity_ids IS NULL OR ev.entity_ids = '') AND ev.category=? ORDER BY ef.ts DESC LIMIT 10"
+        out += [r[0] for r in c.execute(q2, (category,)).fetchall()]
+    return out
 
 ##----------- COMPRESION start ---------------------------
 
@@ -332,6 +377,29 @@ def clamp_chars(text: str, max_chars: int) -> str:
         used += ln
     out.append("… [truncated]")
     return "\n".join(out)
+
+def _extract_followups(aid: int, ts: str, summary: str):
+    import re
+    opts = re.findall(r'(?:\\(|\\b)(\\d+)[\\)\\.\\:]\\s*(.+?)(?=\\n\\d+|\\Z)', summary, flags=re.S)
+    rows = []
+    for num, label in opts:
+        label = " ".join(label.split())
+        if "list" in label.lower() and "automation" in label.lower():
+            code = "list_automations"
+        elif "timeline" in label.lower() and ("energy" in label.lower() or "sensor" in label.lower()):
+            code = "show_energy_timeline"
+        elif "troubleshoot" in label.lower() or "faulty" in label.lower():
+            code = "troubleshoot_sensor"
+        else:
+            continue
+        rows.append((aid, ts, label[:255], code))
+    return rows
+
+    fups = _extract_followups(row_id, row_ts, summary)
+    if fups:
+        with db._conn() as c:
+            c.executemany("INSERT INTO followup_requests (analysis_id, ts, label, code) VALUES (?,?,?,?)", fups)
+            c.commit()
 
 def compose_user_prompt(*, lang: str, hours: int | None, topo: str, state_block: str, history_block: str, events_block: str = "") -> str:
     topo          = clamp_chars(strip_noise(topo), TOPO_MAX_CHARS)
@@ -582,7 +650,11 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                     # after you have: events, all_states, start, now
 
                     # ---- Build entity list for history ----
-                    entity_ids = sorted({e.get("entity_id") for e in events if e.get("entity_id")})[:100]
+                    entity_ids = [e['entity_id'] for e in events[-10:]]  # last few entity IDs from EVENT_BUFFER
+                    notes = _load_context_memos(entity_ids, category="security")  # call per category if you prefer
+                    if notes:
+                        user += "\n\nKnown context / user notes:\n" + "\n".join(f"- {n}" for n in notes)
+
                     if not entity_ids:
                         # fallback: take a subset of current states
                         entity_ids = sorted({s.get("entity_id") for s in all_states if s.get("entity_id")})[:300]
@@ -672,6 +744,17 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
     # Persist
     row = db.add_analysis(mode, focus or (f"{trigger} trigger"), summary, json.dumps(actions))
 
+    if isinstance(row, (list, tuple)):
+        row_id, row_ts = row[0], row[1]
+        events = _extract_events_from_summary(row_id, row_ts, summary)
+        if events:
+            with db._conn() as c:
+                c.executemany(
+                    "INSERT OR IGNORE INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) VALUES (?, ?, ?, ?, ?, ?)",
+                    events
+                )
+                c.commit()
+
     # Notify (nice for auto triggers too)
     if HAVE_REAL:
         try:
@@ -685,6 +768,36 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                 pass
 
     return {"summary": summary, "actions": actions, "row": row}
+
+@app.get("/api/followups")
+def get_followups(analysis_id: int):
+    with db._conn() as c:
+        rows = c.execute("SELECT id, label, code, status FROM followup_requests WHERE analysis_id=?", (analysis_id,)).fetchall()
+        return [dict(id=r[0], label=r[1], code=r[2], status=r[3]) for r in rows]
+
+@app.post("/api/followup/run")
+def run_followup():
+    data = request.get_json(force=True) or {}
+    aid  = int(data.get("analysis_id"))
+    code = data.get("code")
+    if not aid or not code: abort(400, "Missing analysis_id or code")
+    # implement handlers:
+    try:
+        if code == "list_automations":
+            payload = do_list_automations(aid)  # your implementation
+        elif code == "show_energy_timeline":
+            payload = do_energy_timeline(aid)
+        elif code == "troubleshoot_sensor":
+            payload = do_troubleshoot(aid)
+        else:
+            abort(400, "Unknown code")
+        with db._conn() as c:
+            c.execute("UPDATE followup_requests SET status='done' WHERE analysis_id=? AND code=?", (aid, code))
+        return {"ok": True, "payload": payload}
+    except Exception:
+        with db._conn() as c:
+            c.execute("UPDATE followup_requests SET status='failed' WHERE analysis_id=? AND code=?", (aid, code))
+        raise
 
 @app.post("/api/run_history")
 async def run_history(hours: int = Query(..., ge=1, le=48)):
@@ -759,6 +872,17 @@ async def run_history(hours: int = Query(..., ge=1, le=48)):
 
         # Persist just like /api/run
         row = db.add_analysis(mode, focus, summary, json.dumps(actions))
+
+        if isinstance(row, (list, tuple)):
+            row_id, row_ts = row[0], row[1]
+            events = _extract_events_from_summary(row_id, row_ts, summary)
+            if events:
+                with db._conn() as c:
+                    c.executemany(
+                        "INSERT OR IGNORE INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) VALUES (?, ?, ?, ?, ?, ?)",
+                        events
+                    )
+                    c.commit()
 
         # Notify
         if HAVE_REAL:
