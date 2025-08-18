@@ -1191,6 +1191,7 @@ async function runAnalysisNow() {
 }
 
 // ---------- Modal (with Markdown) ----------
+// ---------- Modal (with Markdown) ----------
 async function openModal(row) {
   const overlay   = $("detailsOverlay");
   const title     = $("modalTitle");
@@ -1217,44 +1218,11 @@ async function openModal(row) {
     return md.replace(/\n{3,}/g, "\n\n");
   };
 
-  // --- Followups ---
-  const followups = await jsonFetch(api(`followups?analysis_id=${row.id}`)) || [];
-  if (followups.length) {
-    const actionsWrap = document.createElement("div");
-    actionsWrap.className = "followup-actions flex gap-2 mt-2";
-    followups.forEach(f => {
-      const b = document.createElement("button");
-      b.className = "chip";
-      b.textContent = f.label;
-      b.addEventListener("click", async () => {
-        b.disabled = true;
-        const data = await jsonFetch(api("followup/run"), {
-          method: "POST",
-          headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({ analysis_id: row.id, code: f.code })
-        });
-        const pre = document.createElement("pre");
-        pre.textContent = JSON.stringify(data.payload, null, 2);
-        document.getElementById("modalSummary").appendChild(pre);
-      });
-      actionsWrap.appendChild(b);
-    });
-    container.appendChild(actionsWrap);
-  }
-
   // --- Preprocess + tokenize ---
   const prepped = coerceHeadings(raw);
   let tokens = [];
   try { tokens = (window.marked && marked.lexer) ? marked.lexer(prepped) : []; }
   catch { container.textContent = raw; return; }
-
-  // --- Fetch events for feedback mapping ---
-  const events = await jsonFetch(api(`events?since=${row.ts}&category=`)) || [];
-  const eventMap = {};
-  events.forEach(ev => {
-    const key = (ev.body || "").trim();
-    eventMap[key] = ev.id;
-  });
 
   // --- Group tokens by headings ---
   const sections = [];
@@ -1269,7 +1237,7 @@ async function openModal(row) {
   }
   flush();
 
-  // --- Build UI ---
+  // --- Build UI (clear first) ---
   container.innerHTML = "";
 
   // Hero summary (first section if "Summary")
@@ -1290,13 +1258,86 @@ async function openModal(row) {
     sections.shift();
   }
 
+  // --- Prefetch lookups ONCE for this analysis (no awaits inside per-card code) ---
+  const norm = (s="") => String(s).replace(/\s+/g," ").trim();
+  const esc  = window.escapeHtml || ((s="") => s.replace(/[&<>"]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])));
+
+  // Map of exact bullet/paragraph text -> event row (for this analysis)
+  let evByBody = {};
+  try {
+    const evRows = await jsonFetch(api(`events?since=${encodeURIComponent(row.ts)}&limit=1000`)) || [];
+    evRows
+      .filter(e => e.analysis_id === row.id)
+      .forEach(e => { evByBody[norm(e.body || "")] = e; });
+  } catch { /* non-fatal */ }
+
+  // Map of body text -> array of feedback rows
+  const fbByBody = new Map();
+  try {
+    const fbs = await jsonFetch(api(`feedback?analysis_id=${row.id}&limit=1000`)) || [];
+    fbs.forEach(f => {
+      const k = norm(f.body || "");
+      if (!fbByBody.has(k)) fbByBody.set(k, []);
+      fbByBody.get(k).push(f);
+    });
+  } catch { /* non-fatal */ }
+
+  // --- Followups (place AFTER clearing, so they remain visible) ---
+  try {
+    const followups = await jsonFetch(api(`followups?analysis_id=${row.id}`)) || [];
+    if (followups.length) {
+      const actionsWrap = document.createElement("div");
+      actionsWrap.className = "followup-actions flex gap-2 mt-2";
+      followups.forEach(f => {
+        const b = document.createElement("button");
+        b.className = "chip";
+        b.textContent = f.label;
+        b.addEventListener("click", async () => {
+          b.disabled = true;
+          try {
+            const data = await jsonFetch(api("followup/run"), {
+              method: "POST",
+              headers: {"Content-Type":"application/json"},
+              body: JSON.stringify({ analysis_id: row.id, code: f.code })
+            });
+            const pre = document.createElement("pre");
+            pre.textContent = JSON.stringify(data.payload, null, 2);
+            container.appendChild(pre);
+          } finally {
+            b.disabled = false;
+          }
+        });
+        actionsWrap.appendChild(b);
+      });
+      container.appendChild(actionsWrap);
+    }
+  } catch { /* ignore followups load errors */ }
+
   // Masonry wrap
   const wrap = document.createElement("div");
   wrap.className = "modal-masonry";
   container.appendChild(wrap);
 
+  // Helper: render feedback list items
+  function renderFbList(listEl, items) {
+    if (!items || !items.length) {
+      listEl.innerHTML = "<div class='text-gray-400 text-sm'>No feedback yet.</div>";
+      return;
+    }
+    listEl.innerHTML = items.map(r => `
+      <div class="fb-note py-1 border-t border-white/5">
+        <div class="text-xs text-gray-400">
+          ${new Date(r.ts || Date.now()).toLocaleString()} • ${esc(r.kind || "context")}
+        </div>
+        <div class="text-sm">${esc(r.note || "")}</div>
+      </div>
+    `).join("");
+  }
+
   // Section cards
-  sections.forEach((sec, idx) => {
+  const eligible = new Set(["Comfort","Security","Energy","Anomalies","Presence"]);
+
+  for (const [idx, sec] of sections.entries()) {
     const t = sec.title || (idx === 0 ? "Details" : `Section ${idx + 1}`);
     const theme = categoryClass(t);
 
@@ -1346,61 +1387,18 @@ async function openModal(row) {
       } catch (e) { console.warn("Chart render failed:", e); }
     }
 
-    // ----- Inline feedback controls (modal) -----
-    const eligible = new Set(["Comfort","Security","Energy","Anomalies","Presence"]);
-
-    // tiny helpers
-    const norm = (s="") => String(s).replace(/\s+/g," ").trim();
-    const esc  = window.escapeHtml || ((s="") => s.replace(/[&<>"]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])));
-
-    // Build mapping: body -> event (for this analysis only)
-    let evByBody = {};
-    try {
-      const evRows = await jsonFetch(api(`events?since=${encodeURIComponent(row.ts)}&limit=1000`)) || [];
-      evRows
-        .filter(e => e.analysis_id === row.id)
-        .forEach(e => { evByBody[norm(e.body || "")] = e; });
-    } catch { /* non-fatal */ }
-
-    // Load all feedback for this analysis and group by body
-    const fbByBody = new Map();
-    try {
-      const fbs = await jsonFetch(api(`feedback?analysis_id=${row.id}&limit=1000`)) || [];
-      fbs.forEach(f => {
-        const k = norm(f.body || "");
-        if (!fbByBody.has(k)) fbByBody.set(k, []);
-        fbByBody.get(k).push(f);
-      });
-    } catch { /* non-fatal */ }
-
-    function renderFbList(listEl, items) {
-      if (!items || !items.length) {
-        listEl.innerHTML = "<div class='text-gray-400 text-sm'>No feedback yet.</div>";
-        return;
-      }
-      listEl.innerHTML = items.map(r => `
-        <div class="fb-note py-1 border-t border-white/5">
-          <div class="text-xs text-gray-400">
-            ${new Date(r.ts || Date.now()).toLocaleString()} • ${esc(r.kind || "context")}
-          </div>
-          <div class="text-sm">${esc(r.note || "")}</div>
-        </div>
-      `).join("");
-    }
-
+    // Inline feedback controls (built from prefetches; no awaits here)
     if (eligible.has(t)) {
       const addControlsFor = (el) => {
-        const rawText = el.textContent || "";
-        const key = norm(rawText);
+        const key = norm(el.textContent || "");
         if (!key) return;
 
-        const ev  = evByBody[key];                       // may be undefined (ok)
-        const arr = fbByBody.get(key) || [];             // existing notes for this bullet
+        const ev  = evByBody[key];          // may be undefined (backend can resolve via analysis_id + body)
+        const arr = fbByBody.get(key) || [];
         const count = arr.length;
 
         const box = document.createElement("div");
         box.className = "feedback-box mt-2";
-
         box.innerHTML = `
           <div class="flex gap-2 items-start">
             <textarea class="feedback-text flex-1" rows="2" placeholder="Add feedback about this item…"></textarea>
@@ -1410,7 +1408,7 @@ async function openModal(row) {
           <div class="feedback-list hidden mt-2"></div>
         `;
 
-        // Save handler — backend can resolve event by (analysis_id + body)
+        // Save handler — async, but no await elsewhere in the loop
         box.querySelector(".feedback-save").addEventListener("click", async () => {
           const txtEl = box.querySelector(".feedback-text");
           const note = (txtEl.value || "").trim();
@@ -1421,15 +1419,16 @@ async function openModal(row) {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                event_id: ev?.id,                     // undefined is fine
+                event_id: ev?.id,
                 analysis_id: row.id,
-                category: canonicalizeTitle(t),       // e.g. "security"
-                body: key,                             // exact bullet text
-                note,                                  // the user's note
+                category: canonicalizeTitle(t),
+                body: key,
+                note,
                 kind: "context"
               })
             });
-            // optimistic UI update
+
+            // optimistic local update
             const now = new Date().toISOString();
             const updated = [{ ts: now, note, kind: "context", body: key }, ...(fbByBody.get(key) || [])];
             fbByBody.set(key, updated);
@@ -1444,29 +1443,26 @@ async function openModal(row) {
             }
           } catch (e) {
             console.error("Save feedback failed:", e);
-            // (optional) show a small error message here
           }
         });
 
-        // View toggle
+        // View toggle (uses preloaded/optimistic data)
         const listEl = box.querySelector(".feedback-list");
-        box.querySelector(".feedback-toggle").addEventListener("click", async () => {
+        box.querySelector(".feedback-toggle").addEventListener("click", () => {
           listEl.classList.toggle("hidden");
           if (!listEl.classList.contains("hidden")) {
-            const items = fbByBody.get(key) || [];
-            renderFbList(listEl, items);
+            renderFbList(listEl, fbByBody.get(key) || []);
           }
         });
 
         el.appendChild(box);
       };
 
-      // Attach to bullet items + paragraphs
       card.querySelectorAll("li, p").forEach(addControlsFor);
     }
 
     wrap.appendChild(card);
-  });
+  }
 
   // Finalize modal open
   overlay.classList.remove("hidden");
@@ -1474,6 +1470,7 @@ async function openModal(row) {
   $("overlayBackdrop").addEventListener("click", closeModal, { once: true });
   $("modalClose").addEventListener("click", closeModal, { once: true });
 }
+
 
 
 
