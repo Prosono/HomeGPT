@@ -616,3 +616,248 @@ p:hover .feedback-btn {
   cursor: pointer; font-size: 0.875rem;
 }
 .followup-actions .chip:hover { background: #4b5563; }
+
+/* ===========================
+   Feedback Manager styling
+   =========================== */
+
+:root {
+  --fbm-bg:        #0b1220;   /* panel background */
+  --fbm-elev:      #0f172a;   /* elevated card bg */
+  --fbm-text:      #e5e7eb;   /* primary text */
+  --fbm-subtle:    #94a3b8;   /* secondary text */
+  --fbm-border:    rgba(255,255,255,0.10);
+  --fbm-border-2:  rgba(255,255,255,0.06);
+  --fbm-accent:    #60a5fa;   /* actions / focus */
+  --fbm-danger:    #ef4444;
+  --fbm-ok:        #22c55e;
+  --fbm-chip:      #1f2937;
+  --fbm-chip-hov:  #2b3546;
+  --fbm-shadow:    0 10px 35px rgba(0,0,0,.45), 0 2px 10px rgba(0,0,0,.35);
+}
+
+/* Dialog shells */
+#dlg-manage-feedback,
+#dlg-edit-feedback {
+  width: min(980px, 92vw);
+  max-height: 90vh;
+  padding: 0;
+  border: 1px solid var(--fbm-border);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent) , var(--fbm-bg);
+  color: var(--fbm-text);
+  box-shadow: var(--fbm-shadow);
+  overflow: hidden;
+}
+
+/* Nice backdrop */
+#dlg-manage-feedback::backdrop,
+#dlg-edit-feedback::backdrop {
+  background: rgba(8,11,19,0.55);
+  backdrop-filter: blur(6px);
+}
+
+/* Generic dialog sections */
+.fbm-head {
+  position: sticky; top: 0;
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--fbm-border);
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.01));
+  z-index: 2;
+}
+
+.fbm-head h2 {
+  font-size: 16px; font-weight: 600; margin: 0;
+  letter-spacing: .2px;
+}
+
+.fbm-body {
+  padding: 14px 16px 16px;
+  overflow: auto;
+  max-height: calc(90vh - 56px);
+}
+
+/* Toolbar (filters) */
+.fbm-toolbar {
+  display: grid;
+  grid-template-columns: 1fr 240px 180px auto;
+  gap: 10px;
+  margin: 8px 0 14px;
+}
+
+@media (max-width: 800px) {
+  .fbm-toolbar { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 520px) {
+  .fbm-toolbar { grid-template-columns: 1fr; }
+}
+
+.fbm-input, #fbm-search, #fbm-entity, #fbm-category {
+  width: 100%;
+  appearance: none;
+  color: var(--fbm-text);
+  background: var(--fbm-elev);
+  border: 1px solid var(--fbm-border-2);
+  border-radius: 10px;
+  padding: 10px 12px;
+  outline: none;
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+#fbm-category { padding-right: 36px; }
+
+.fbm-input::placeholder, #fbm-search::placeholder, #fbm-entity::placeholder {
+  color: var(--fbm-subtle);
+}
+
+.fbm-input:focus, #fbm-search:focus, #fbm-entity:focus, #fbm-category:focus {
+  border-color: color-mix(in oklab, var(--fbm-accent) 60%, white 0%);
+  box-shadow: 0 0 0 3px rgba(96,165,250,.25);
+}
+
+/* Buttons */
+.fbm-btn, #fbm-refresh, #fbm-close,
+#fbe-save, #fbe-delete, #fbe-cancel {
+  -webkit-tap-highlight-color: transparent;
+  border: 1px solid var(--fbm-border);
+  background: var(--fbm-elev);
+  color: var(--fbm-text);
+  padding: 9px 12px;
+  border-radius: 10px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: transform .04s ease, background .15s ease, border-color .15s ease;
+}
+.fbm-btn:hover, #fbm-refresh:hover, #fbm-close:hover,
+#fbe-save:hover, #fbe-delete:hover, #fbe-cancel:hover {
+  background: #152037;
+}
+.fbm-btn:active, #fbm-refresh:active, #fbm-close:active,
+#fbe-save:active, #fbe-delete:active, #fbe-cancel:active {
+  transform: translateY(1px);
+}
+
+/* Button variants */
+#fbm-refresh { border-color: color-mix(in oklab, var(--fbm-accent) 30%, transparent); }
+#fbe-save    { border-color: color-mix(in oklab, var(--fbm-ok) 30%, transparent); }
+#fbe-delete  { border-color: color-mix(in oklab, var(--fbm-danger) 35%, transparent); color: #fecaca; }
+#fbe-cancel, #fbm-close { color: var(--fbm-subtle); }
+
+/* Chips (scoped so you don't overwrite your global .chip if you have one) */
+#dlg-manage-feedback .chip,
+#dlg-edit-feedback .chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+  border-radius: 999px;
+  background: var(--fbm-chip);
+  border: 1px solid var(--fbm-border);
+  color: var(--fbm-text);
+  cursor: default;
+}
+#dlg-manage-feedback .chip:hover,
+#dlg-edit-feedback .chip:hover {
+  background: var(--fbm-chip-hov);
+}
+
+/* List */
+#fbm-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+@media (min-width: 1000px) {
+  #fbm-list { grid-template-columns: 1fr 1fr; }
+}
+
+#fbm-list > div {
+  border: 1px solid var(--fbm-border);
+  background: linear-gradient(180deg, rgba(255,255,255,0.02), transparent), var(--fbm-elev);
+  border-radius: 12px;
+  transition: border-color .15s ease, background .15s ease, transform .06s ease;
+}
+#fbm-list > div:hover {
+  border-color: rgba(255,255,255,0.16);
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent), var(--fbm-elev);
+}
+#fbm-list .fbm-note {
+  color: var(--fbm-text);
+  line-height: 1.45;
+}
+
+/* Edit dialog content */
+#dlg-edit-feedback .fbe-wrap { padding: 14px 16px 16px; }
+#dlg-edit-feedback h3 {
+  margin: 0 0 8px 0; font-size: 15px; font-weight: 600;
+}
+#fbe-meta {
+  font-size: 12.5px;
+  color: var(--fbm-subtle);
+  border: 1px dashed var(--fbm-border);
+  border-radius: 10px;
+  padding: 10px;
+  background: #0d1528;
+  margin-bottom: 10px;
+}
+
+#fbe-note {
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+  color: var(--fbm-text);
+  background: var(--fbm-elev);
+  border: 1px solid var(--fbm-border-2);
+  border-radius: 10px;
+  padding: 10px 12px;
+  outline: none;
+  line-height: 1.45;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+#fbe-note:focus {
+  border-color: color-mix(in oklab, var(--fbm-accent) 50%, white 0%);
+  box-shadow: 0 0 0 3px rgba(96,165,250,.22);
+}
+
+#fbe-kind {
+  width: 180px;
+  margin-top: 8px;
+  color: var(--fbm-text);
+  background: var(--fbm-elev);
+  border: 1px solid var(--fbm-border-2);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.fbe-actions {
+  display: flex; gap: 10px; align-items: center; justify-content: flex-end;
+  margin-top: 12px;
+}
+
+#fbe-result {
+  font-size: 12.5px; color: var(--fbm-subtle);
+  margin-left: auto; margin-right: 6px;
+}
+
+/* Close “x” in headers (optional) */
+.fbm-head .close-x {
+  margin-left: auto;
+  width: 36px; height: 36px; border-radius: 10px;
+  display: grid; place-items: center;
+  cursor: pointer;
+  border: 1px solid var(--fbm-border);
+  background: var(--fbm-elev);
+}
+.fbm-head .close-x:hover { background: #16213a; }
+
+/* Subtle scrollbars (webkit) */
+#dlg-manage-feedback .fbm-body::-webkit-scrollbar,
+#dlg-edit-feedback .fbm-body::-webkit-scrollbar {
+  height: 10px; width: 10px;
+}
+#dlg-manage-feedback .fbm-body::-webkit-scrollbar-thumb,
+#dlg-edit-feedback .fbm-body::-webkit-scrollbar-thumb {
+  background: rgba(148,163,184,.35);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
