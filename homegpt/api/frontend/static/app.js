@@ -845,75 +845,115 @@ function renderTrendChart(labels, energyData, powerData) {
   });
 }
 
-// --- FEEDBACK DIALOG PLUMBING ---
-function openFeedbackDialog({ analysis_id, category = "generic", body = "", event_id = null, presetNote = "" } = {}) {
+// --- FEEDBACK DIALOG PLUMBING (robust) ---
+function openFeedbackDialog({
+  analysis_id,
+  category = "generic",
+  body = "",
+  event_id = null,
+  presetNote = ""
+} = {}) {
   const dlg = $("dlg-feedback");
   if (!dlg) return;
 
-  $("fb-analysis-id").value = analysis_id || "";
-  $("fb-event-id").value    = event_id || "";
-  $("fb-body").value        = body || "";
-  $("fb-kind").value        = "context";
-  $("fb-category").value    = (category || "generic").toLowerCase();
-  $("fb-text").value        = presetNote;
+  const set = (id, val) => { const el = $(id); if (el) el.value = val ?? ""; };
 
-  // Context preview for the user
-  $("fb-context").textContent = body ? `About: ${body.slice(0, 280)}${body.length > 280 ? "…" : ""}` : "";
+  set("fb-analysis-id", analysis_id ?? "");
+  set("fb-event-id",    event_id ?? "");
+  set("fb-body",        body);
+  set("fb-kind",        "context");
+  set("fb-category",    (category || "generic").toLowerCase());
+  set("fb-text",        presetNote);
 
-  $("fb-result").textContent = "";
-  dlg.showModal();
+  const ctx = $("fb-context");
+  if (ctx) ctx.textContent = body
+    ? `About: ${body.slice(0, 280)}${body.length > 280 ? "…" : ""}`
+    : "";
+
+  const res = $("fb-result");
+  if (res) res.textContent = "";
+
+  // open <dialog> or fallback
+  if (typeof dlg.showModal === "function") dlg.showModal();
+  else dlg.classList.remove("hidden");
 }
 
 (function initFeedbackDialog(){
   const dlg = $("dlg-feedback");
   if (!dlg) return;
 
-  $("fb-cancel")?.addEventListener("click", () => dlg.close());
+  $("fb-cancel")?.addEventListener("click", () => {
+    dlg.close?.();
+    dlg.classList.add("hidden");
+  });
 
   $("fb-form")?.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const resEl = $("fb-result");
     const submitBtn = $("fb-submit");
-    submitBtn.disabled = true;
+    if (submitBtn) submitBtn.disabled = true;
 
-    // Build payload (server can resolve event by analysis_id + body if event_id omitted)
+    // Safely read values (avoid null .value accesses)
+    const getV = id => ($(id) && $(id).value) || "";
+    const analysisIdNum = Number(getV("fb-analysis-id"));
+    const eventIdNum    = Number(getV("fb-event-id"));
+
     const payload = {
-      analysis_id: $("fb-analysis-id").value ? Number($("fb-analysis-id").value) : undefined,
-      event_id: $("fb-event-id").value ? Number($("fb-event-id").value) : undefined,
-      category: $("fb-category").value || "generic",
-      kind: $("fb-kind").value || "context",
-      note: ($("fb-text").value || "").trim(),
-      body: $("fb-body").value || ""
+      analysis_id: Number.isFinite(analysisIdNum) && analysisIdNum > 0 ? analysisIdNum : undefined,
+      event_id:    Number.isFinite(eventIdNum)    && eventIdNum > 0    ? eventIdNum    : undefined,
+      category: (getV("fb-category") || "generic").toLowerCase(),
+      kind:     (getV("fb-kind") || "context").toLowerCase(),
+      note:     (getV("fb-text") || "").trim(),
+      body:     (getV("fb-body") || "").trim()
     };
 
     if (!payload.note) {
-      $("fb-result").textContent = "Please add a short note before submitting.";
-      submitBtn.disabled = false;
+      if (resEl) resEl.textContent = "Please add a short note before submitting.";
+      submitBtn && (submitBtn.disabled = false);
       return;
     }
 
     try {
-      // Align with your backend route name:
-    await jsonFetch(api("feedback"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)  // <-- use the form payload you built above
-    });
-      $("fb-result").textContent = "Thanks — saved!";
-      await loadEvents();     
-      if ($("fb-event-id").value) {
-        const eid = Number($("fb-event-id").value);
+      const res = await fetch(api("feedback"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      // read text first (backend might return plain text on error)
+      const raw = await res.text();
+      let data = null;
+      try { data = JSON.parse(raw); } catch {}
+
+      if (!res.ok) {
+        const msg = data?.detail || data?.message || raw || `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+
+      if (resEl) resEl.textContent = "Thanks — saved!";
+
+      // refresh sidebar events list (if present)
+      if (typeof loadEvents === "function") {
+        await loadEvents();
+      }
+
+      // if we saved against a specific event and its list is open, refresh that list
+      const eid = payload.event_id;
+      if (eid && typeof renderFeedbackListForEvent === "function") {
         const box = document.getElementById(`fb-list-${eid}`);
         if (box && !box.classList.contains("hidden")) {
-          box.dataset.loaded = "";                            // force reload
+          box.dataset.loaded = "";           // force reload
           await renderFeedbackListForEvent(eid);
         }
       }
-      setTimeout(()=> dlg.close(), 600);
+
+      setTimeout(() => { dlg.close?.(); dlg.classList.add("hidden"); }, 500);
+
     } catch (err) {
       console.error("Feedback error:", err);
-      $("fb-result").textContent = "Sorry, failed to save feedback.";
+      if (resEl) resEl.textContent = "Sorry, failed to save feedback.";
     } finally {
-      submitBtn.disabled = false;
+      submitBtn && (submitBtn.disabled = false);
     }
   });
 })();
