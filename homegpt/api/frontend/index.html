@@ -83,6 +83,9 @@
         </div>
       </div>
 
+      <!-- Open manager button somewhere in your header -->
+      <button id="btn-manage-feedback" class="chip">Manage feedback</button>
+
       <!-- History range dialog -->
       <dialog id="dlg-history" class="card rounded-xl p-6 text-gray-200">
         <form method="dialog">
@@ -113,6 +116,27 @@
         <!-- app.js will fill this -->
       </div>
     </div>
+
+
+    <dialog id="dlg-manage-feedback" class="modal">
+      <div class="modal-head">
+        <h3 class="text-lg font-semibold">Feedback Manager</h3>
+        <button id="fbm-close" class="chip">Close</button>
+      </div>
+
+      <div class="flex gap-2 my-2">
+        <input id="fbm-search" class="input" placeholder="Search notes, bodies, entities…" />
+        <input id="fbm-entity" class="input" placeholder="Filter by entity_id (e.g. sensor.power)" />
+        <select id="fbm-category" class="input">
+          <option value="">All categories</option>
+          <option>security</option><option>comfort</option><option>energy</option>
+          <option>anomalies</option><option>presence</option>
+        </select>
+        <button id="fbm-refresh" class="chip">Refresh</button>
+      </div>
+
+      <div id="fbm-list" class="space-y-2 max-h-[60vh] overflow-auto"></div>
+    </dialog>
 
       <!-- Analysis Heatmap -->
       <div class="mb-6">

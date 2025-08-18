@@ -34,7 +34,7 @@ from pydantic import BaseModel
 from fastapi import Query
 from typing import Optional, List
 from fastapi import Body
-
+from fastapi import Path
 
 import yaml
 from fastapi import FastAPI, Query, Body
@@ -101,16 +101,36 @@ _last_auto_run_ts: float | None = None
 
 # Import DB, models, analyzer
 # MODELS
+# MODELS
+from typing import Optional  # <-- ensure this is available at module scope
+
 try:
-    from .models import AnalysisRequest, Settings, FollowupRunRequest, EventFeedbackIn
+    # If your local models module exists, import everything including FeedbackUpdate
+    from .models import (
+        AnalysisRequest,
+        Settings,
+        FollowupRunRequest,
+        EventFeedbackIn,
+        FeedbackUpdate,   # <-- add this
+    )
 except ImportError:
     try:
-        from homegpt.api.models import AnalysisRequest, Settings, FollowupRunRequest, EventFeedbackIn
+        # If running as packaged module
+        from homegpt.api.models import (
+            AnalysisRequest,
+            Settings,
+            FollowupRunRequest,
+            EventFeedbackIn,
+            FeedbackUpdate,  # <-- add this
+        )
     except ImportError:
+        # Final fallback: define the minimal models here
         from pydantic import BaseModel
+
         class AnalysisRequest(BaseModel):
             mode: str | None = None
             focus: str | None = None
+
         class Settings(BaseModel):
             openai_api_key: str | None = None
             model: str | None = None
@@ -121,9 +141,11 @@ except ImportError:
             dry_run: bool | None = None
             log_level: str | None = None
             language: str | None = None
+
         class FollowupRunRequest(BaseModel):
             analysis_id: int
             code: str
+
         class EventFeedbackIn(BaseModel):
             event_id: int | None = None
             analysis_id: int | None = None
@@ -131,6 +153,10 @@ except ImportError:
             category: str | None = None
             note: str
             kind: str | None = "context"
+
+        class FeedbackUpdate(BaseModel):
+            note: str | None = None
+            kind: str | None = None  # "context" | "correction" | "preference"
 
 # DB
 try:
@@ -1037,6 +1063,123 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
 #    except Exception as e:
 #        logger.exception("Error in /api/feedback: %s", e)
 #        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/feedbacks")
+def list_feedbacks(
+    q: Optional[str] = Query(None, description="search note/body/entity_id"),
+    entity_id: Optional[str] = Query(None),
+    category: Optional[str] = Query(None),
+    analysis_id: Optional[int] = Query(None),
+    since: Optional[str] = Query(None, description="ISO timestamp"),
+    limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+):
+    """
+    Return feedback notes with their linked event + entity info.
+    """
+    # Normalize 'since' to naive ISO (sqlite friendly)
+    if since:
+        try:
+            s = since.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            since = dt.isoformat(timespec="seconds")
+        except Exception:
+            since = None
+
+    sql = [
+        "SELECT ef.id, ef.event_id, ef.ts, ef.note, ef.kind, ef.source,",
+        "       ev.analysis_id, ev.category, ev.title, ev.body, ev.entity_ids",
+        "FROM event_feedback ef",
+        "JOIN analysis_events ev ON ev.id = ef.event_id",
+        "WHERE 1=1"
+    ]
+    args: list = []
+
+    if analysis_id:
+        sql.append("AND ev.analysis_id = ?")
+        args.append(int(analysis_id))
+    if category:
+        sql.append("AND ev.category = ?")
+        args.append(category)
+    if entity_id:
+        sql.append("AND (ev.entity_ids LIKE ?)")
+        args.append(f"%{entity_id}%")
+    if q:
+        # search note/body/title/entities
+        sql.append("AND (ef.note LIKE ? OR ev.body LIKE ? OR ev.title LIKE ? OR ev.entity_ids LIKE ?)")
+        like = f"%{q}%"
+        args += [like, like, like, like]
+    if since:
+        sql.append("AND ef.ts >= ?")
+        args.append(since)
+
+    sql.append("ORDER BY ef.ts DESC LIMIT ? OFFSET ?")
+    args += [int(limit), int(offset)]
+
+    with db._conn() as c:
+        rows = c.execute(" ".join(sql), args).fetchall()
+
+    keys = ["id","event_id","ts","note","kind","source","analysis_id","category","title","body","entity_ids"]
+    out = [dict(zip(keys, r)) for r in rows]
+
+    # Add a parsed list for convenience
+    for r in out:
+        ids = (r.get("entity_ids") or "")
+        r["entities"] = [e for e in ids.split(",") if e.strip()]
+        r["ts"] = _ts_to_local_iso(r.get("ts"))
+    return out
+
+
+@app.get("/api/feedback/{fb_id}")
+def get_feedback(fb_id: int = Path(...)):
+    with db._conn() as c:
+        r = c.execute(
+            "SELECT ef.id, ef.event_id, ef.ts, ef.note, ef.kind, ef.source, "
+            "       ev.analysis_id, ev.category, ev.title, ev.body, ev.entity_ids "
+            "FROM event_feedback ef "
+            "JOIN analysis_events ev ON ev.id = ef.event_id "
+            "WHERE ef.id = ?",
+            (int(fb_id),)
+        ).fetchone()
+    if not r:
+        raise HTTPException(status_code=404, detail="Feedback not found")
+    keys = ["id","event_id","ts","note","kind","source","analysis_id","category","title","body","entity_ids"]
+    row = dict(zip(keys, r))
+    row["entities"] = [e for e in (row.get("entity_ids") or "").split(",") if e.strip()]
+    row["ts"] = _ts_to_local_iso(row.get("ts"))
+    return row
+
+
+@app.put("/api/feedback/{fb_id}")
+def update_feedback(fb_id: int, payload: FeedbackUpdate):
+    fields = []
+    args: list = []
+    if payload.note is not None:
+        fields.append("note = ?")
+        args.append(payload.note.strip())
+    if payload.kind is not None:
+        fields.append("kind = ?")
+        args.append(payload.kind.strip().lower())
+
+    if not fields:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+
+    args.append(int(fb_id))
+    with db._conn() as c:
+        c.execute(f"UPDATE event_feedback SET {', '.join(fields)} WHERE id = ?", args)
+        c.commit()
+    return {"ok": True, "id": fb_id}
+
+
+@app.delete("/api/feedback/{fb_id}")
+def delete_feedback(fb_id: int):
+    with db._conn() as c:
+        c.execute("DELETE FROM event_feedback WHERE id = ?", (int(fb_id),))
+        c.commit()
+    return {"ok": True}
+
 
 @app.get("/api/feedback")
 def get_feedback(

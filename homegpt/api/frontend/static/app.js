@@ -1524,6 +1524,149 @@ async function openModal(row) {
 
 
 
+// -------- Feedback Manager (UI) --------
+function fbmEsc(s=""){ return (window.escapeHtml ? escapeHtml(s) :
+  s.replace(/[&<>"]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]))); }
+
+async function loadFeedbacks({ q="", entity_id="", category="" } = {}) {
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (entity_id) params.set("entity_id", entity_id);
+  if (category) params.set("category", category);
+  params.set("limit", "500");
+  const url = api(`feedbacks?${params.toString()}`);
+  return await jsonFetch(url) || [];
+}
+
+function renderFeedbackList(rows) {
+  const box = document.getElementById("fbm-list");
+  if (!box) return;
+  if (!rows.length) {
+    box.innerHTML = "<div class='text-gray-400 text-sm'>No feedback found.</div>";
+    return;
+  }
+  box.innerHTML = rows.map(r => {
+    const ents = (r.entities || []).map(e=>`<span class="chip">${fbmEsc(e)}</span>`).join(" ");
+    return `
+      <div class="p-3 rounded border border-white/10 hover:bg-white/5">
+        <div class="flex items-start gap-3">
+          <div class="text-xs text-gray-400 min-w-[20ch]">${fbmEsc(r.ts || "")}</div>
+          <span class="chip">${fbmEsc(r.category || "generic")}</span>
+          <div class="flex-1">
+            <div class="text-sm text-gray-300">${fbmEsc(r.title || r.body || "")}</div>
+            <div class="text-sm mt-1">${fbmEsc(r.note || "")}</div>
+            <div class="mt-1 flex flex-wrap gap-1">${ents}</div>
+            <div class="mt-2 flex gap-2">
+              <button class="chip" data-edit="${r.id}">Edit</button>
+              <button class="chip" data-open="${r.analysis_id}">Open analysis</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join("");
+
+  // Wire “Edit”
+  box.querySelectorAll("[data-edit]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const id = Number(btn.getAttribute("data-edit"));
+      const row = await jsonFetch(api(`feedback/${id}`));
+      openFeedbackEditor(row);
+    });
+  });
+
+  // Wire “Open analysis” (reuses your modal)
+  box.querySelectorAll("[data-open]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const aid = Number(btn.getAttribute("data-open"));
+      const item = await jsonFetch(api(`history/${aid}`));
+      if (item) openModal(item);
+    });
+  });
+}
+
+async function refreshFeedbackManager() {
+  const q   = document.getElementById("fbm-search")?.value.trim() || "";
+  const ent = document.getElementById("fbm-entity")?.value.trim() || "";
+  const cat = document.getElementById("fbm-category")?.value || "";
+  const rows = await loadFeedbacks({ q, entity_id: ent, category: cat });
+  renderFeedbackList(rows);
+}
+
+function openFeedbackManager() {
+  const dlg = document.getElementById("dlg-manage-feedback");
+  if (!dlg) return;
+  if (typeof dlg.showModal === "function") dlg.showModal(); else dlg.classList.remove("hidden");
+  refreshFeedbackManager().catch(console.error);
+}
+
+// Edit dialog
+function openFeedbackEditor(row) {
+  const dlg = document.getElementById("dlg-edit-feedback");
+  if (!dlg) return;
+  document.getElementById("fbe-id").value   = row.id;
+  document.getElementById("fbe-note").value = row.note || "";
+  document.getElementById("fbe-kind").value = (row.kind || "context");
+  const ents = (row.entities || []).map(e=>`<span class="chip">${fbmEsc(e)}</span>`).join(" ");
+  document.getElementById("fbe-meta").innerHTML =
+    `${fbmEsc(row.ts || "")} • <b>${fbmEsc(row.category || "generic")}</b><br>${fbmEsc(row.title || row.body || "")}<div class="mt-1">${ents}</div>`;
+  document.getElementById("fbe-result").textContent = "";
+  dlg.showModal?.(); dlg.classList.remove("hidden");
+}
+
+async function saveFeedbackEdit() {
+  const id   = Number(document.getElementById("fbe-id").value);
+  const note = (document.getElementById("fbe-note").value || "").trim();
+  const kind = (document.getElementById("fbe-kind").value || "context").trim();
+  const resEl = document.getElementById("fbe-result");
+  try {
+    await jsonFetch(api(`feedback/${id}`), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ note, kind })
+    });
+    resEl.textContent = "Saved.";
+    await refreshFeedbackManager();
+    setTimeout(()=> document.getElementById("dlg-edit-feedback").close?.(), 400);
+  } catch (e) {
+    console.error(e);
+    resEl.textContent = "Failed to save.";
+  }
+}
+
+async function deleteFeedbackEdit() {
+  const id = Number(document.getElementById("fbe-id").value);
+  const resEl = document.getElementById("fbe-result");
+  if (!confirm("Delete this feedback permanently?")) return;
+  try {
+    await jsonFetch(api(`feedback/${id}`), { method: "DELETE" });
+    resEl.textContent = "Deleted.";
+    await refreshFeedbackManager();
+    setTimeout(()=> document.getElementById("dlg-edit-feedback").close?.(), 400);
+  } catch (e) {
+    console.error(e);
+    resEl.textContent = "Failed to delete.";
+  }
+}
+
+// Init wiring
+(function initFeedbackManager(){
+  const btn = document.getElementById("btn-manage-feedback");
+  const dlg = document.getElementById("dlg-manage-feedback");
+  const dlgEdit = document.getElementById("dlg-edit-feedback");
+  if (!btn || !dlg || !dlgEdit) return;
+
+  btn.addEventListener("click", openFeedbackManager);
+  document.getElementById("fbm-close").addEventListener("click", ()=> dlg.close?.());
+  document.getElementById("fbm-refresh").addEventListener("click", ()=> refreshFeedbackManager());
+  document.getElementById("fbm-search").addEventListener("keydown", e => { if (e.key === "Enter") refreshFeedbackManager(); });
+  document.getElementById("fbm-entity").addEventListener("keydown", e => { if (e.key === "Enter") refreshFeedbackManager(); });
+  document.getElementById("fbm-category").addEventListener("change", ()=> refreshFeedbackManager());
+
+  document.getElementById("fbe-save").addEventListener("click", saveFeedbackEdit);
+  document.getElementById("fbe-delete").addEventListener("click", deleteFeedbackEdit);
+  document.getElementById("fbe-cancel").addEventListener("click", ()=> dlgEdit.close?.());
+})();
 
 
 
