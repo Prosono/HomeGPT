@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>SMARTi Spectra</title>
 
-  <!-- Preconnects for faster CDNs -->
+  <!-- Preconnects -->
   <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin>
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 
@@ -17,6 +17,44 @@
 
   <!-- App styles -->
   <link rel="stylesheet" href="static/style.css" />
+
+  <!-- Minimal page-specific styling (events grid + pager).
+       Move to static/style.css later if you prefer. -->
+  <style>
+    /* ===== Events list layout ===== */
+    #eventsList .event-row{
+      display:grid;
+      grid-template-columns: 200px 1fr auto;
+      gap:14px;
+      padding:12px 0;
+      border-bottom:1px solid rgba(255,255,255,.06);
+    }
+    #eventsList .event-meta{display:flex; flex-direction:column; gap:6px; min-width:0}
+    #eventsList .event-time{color:#94a3b8; font-size:12.5px}
+    #eventsList .event-main .title{font-weight:600}
+    #eventsList .event-main .body{color:#94a3b8}
+
+    /* actions on the right */
+    #eventsList .event-actions{
+      display:flex; align-items:flex-start; gap:8px; padding-top:2px;
+    }
+    /* Reuse existing pill styles from analysis; just spacing here */
+    #eventsList .pill{display:inline-flex; align-items:center; gap:6px}
+
+    /* Pagination */
+    #eventsPager{display:flex; justify-content:center; align-items:center; gap:10px; padding:10px 0}
+    #eventsPager .pager-btn{
+      border:1px solid rgba(255,255,255,.12);
+      background:#0f172a; color:#e5e7eb; padding:8px 12px; border-radius:10px; cursor:pointer
+    }
+    #eventsPager .pager-btn[disabled]{opacity:.45; cursor:not-allowed}
+    #eventsPager .pager-meta{color:#94a3b8; font-size:12.5px}
+
+    @media (max-width: 860px){
+      #eventsList .event-row{grid-template-columns: 1fr}
+      #eventsList .event-actions{justify-content:flex-start; padding-left:0}
+    }
+  </style>
 </head>
 <body class="bg-gray-900 text-gray-200 font-sans antialiased selection:bg-indigo-600/30 selection:text-white">
 
@@ -83,14 +121,14 @@
         </div>
       </div>
 
-      <!-- Open manager button somewhere in your header -->
+      <!-- Open manager button -->
       <button id="btn-manage-feedback" class="chip">Manage feedback</button>
 
       <!-- History range dialog -->
       <dialog id="dlg-history" class="card rounded-xl p-6 text-gray-200">
         <form method="dialog">
           <h3 class="text-lg font-extrabold mb-3">Select time range</h3>
-          <div id="history-options" class="flex flex-wrap gap-2 mb-4"><!-- buttons injected by JS --></div>
+          <div id="history-options" class="flex flex-wrap gap-2 mb-4"></div>
           <div class="text-right">
             <button value="cancel" class="btn btn-ghost">
               <i class="mdi mdi-close"></i>Cancel
@@ -106,62 +144,57 @@
         </div>
       </div>
 
-    <!-- Events (last 24h) -->
-    <div class="mb-6">
-      <div class="flex items-center justify-between mb-2">
-        <h2>Events (last 24h)</h2>
-        <div class="text-xs text-gray-400">Auto-extracted from analyses</div>
-      </div>
-      <div id="eventsList" class="divide-y divide-white/10 text-sm">
-        <!-- app.js will fill this -->
-      </div>
-    </div>
-
-
-
-    <!-- Event dialog -->
-    <dialog id="dlg-manage-feedback" class="modal">
-      <div class="modal-head">
-        <h3 class="text-lg font-semibold">Feedback Manager</h3>
-        <button id="fbm-close" class="chip">Close</button>
+      <!-- Events (last 24h) -->
+      <div class="mb-6">
+        <div class="flex items-center justify-between mb-2">
+          <h2>Events (last 24h)</h2>
+          <div class="text-xs text-gray-400">Auto-extracted from analyses</div>
+        </div>
+        <div id="eventsList" class="text-sm"><!-- app.js injects .event-row items --></div>
+        <div id="eventsPager"></div>
       </div>
 
-      <div class="flex gap-2 my-2">
-        <input id="fbm-search" class="input" placeholder="Search notes, bodies, entities…" />
-        <input id="fbm-entity" class="input" placeholder="Filter by entity_id (e.g. sensor.power)" />
-        <select id="fbm-category" class="input">
-          <option value="">All categories</option>
-          <option>security</option><option>comfort</option><option>energy</option>
-          <option>anomalies</option><option>presence</option>
+      <!-- Feedback Manager -->
+      <dialog id="dlg-manage-feedback" class="modal">
+        <div class="modal-head">
+          <h3 class="text-lg font-semibold">Feedback Manager</h3>
+          <button id="fbm-close" class="chip">Close</button>
+        </div>
+
+        <div class="flex gap-2 my-2">
+          <input id="fbm-search" class="input" placeholder="Search notes, bodies, entities…" />
+          <input id="fbm-entity" class="input" placeholder="Filter by entity_id (e.g. sensor.power)" />
+          <select id="fbm-category" class="input">
+            <option value="">All categories</option>
+            <option>security</option><option>comfort</option><option>energy</option>
+            <option>anomalies</option><option>presence</option>
+          </select>
+          <button id="fbm-refresh" class="chip">Refresh</button>
+        </div>
+
+        <div id="fbm-list" class="space-y-2 max-h-[60vh] overflow-auto"></div>
+      </dialog>
+
+      <!-- Edit Feedback -->
+      <dialog id="dlg-edit-feedback" class="modal">
+        <h3 class="text-lg font-semibold mb-2">Edit feedback</h3>
+        <input id="fbe-id" type="hidden" />
+        <div class="text-sm text-gray-400 mb-2" id="fbe-meta"></div>
+        <label class="block text-sm mb-1">Note</label>
+        <textarea id="fbe-note" class="input" rows="4"></textarea>
+        <label class="block text-sm mt-2 mb-1">Kind</label>
+        <select id="fbe-kind" class="input">
+          <option value="context">context</option>
+          <option value="correction">correction</option>
+          <option value="preference">preference</option>
         </select>
-        <button id="fbm-refresh" class="chip">Refresh</button>
-      </div>
-
-      <div id="fbm-list" class="space-y-2 max-h-[60vh] overflow-auto"></div>
-    </dialog>
-
-
-    <!-- Edit Event dialog -->
-    <dialog id="dlg-edit-feedback" class="modal">
-      <h3 class="text-lg font-semibold mb-2">Edit feedback</h3>
-      <input id="fbe-id" type="hidden" />
-      <div class="text-sm text-gray-400 mb-2" id="fbe-meta"></div>
-      <label class="block text-sm mb-1">Note</label>
-      <textarea id="fbe-note" class="input" rows="4"></textarea>
-      <label class="block text-sm mt-2 mb-1">Kind</label>
-      <select id="fbe-kind" class="input">
-        <option value="context">context</option>
-        <option value="correction">correction</option>
-        <option value="preference">preference</option>
-      </select>
-      <div class="mt-3 flex gap-2">
-        <button id="fbe-save" class="chip">Save</button>
-        <button id="fbe-delete" class="chip">Delete…</button>
-        <button id="fbe-cancel" class="chip">Cancel</button>
-      </div>
-      <div id="fbe-result" class="text-sm mt-2"></div>
-    </dialog>
-
+        <div class="mt-3 flex gap-2">
+          <button id="fbe-save" class="chip">Save</button>
+          <button id="fbe-delete" class="chip">Delete…</button>
+          <button id="fbe-cancel" class="chip">Cancel</button>
+        </div>
+        <div id="fbe-result" class="text-sm mt-2"></div>
+      </dialog>
 
       <!-- Analysis Heatmap -->
       <div class="mb-6">
@@ -203,7 +236,6 @@
       <div class="card modal-panel rounded-xl shadow-2xl p-6 relative w-full max-w-5xl">
         <button id="modalClose" class="absolute top-3 right-3 text-gray-300 hover:text-white text-xl leading-none" aria-label="Close dialog">✕</button>
 
-        <!-- Visible title/meta -->
         <div class="space-y-2 mb-4">
           <h2 id="modalTitle" class="text-2xl font-bold text-indigo-300">Analysis</h2>
           <div id="modalMeta" class="text-sm text-gray-400"></div>
@@ -213,7 +245,7 @@
         <h2 id="title" class="sr-only">Analysis</h2>
         <div id="meta" class="sr-only"></div>
 
-        <!-- Optional hero -->
+        <!-- Optional hero (filled by JS) -->
         <div class="modal-hero mb-6">
           <div class="hero-head">
             <i class="mdi mdi-home-analytics"></i>
@@ -222,109 +254,13 @@
           <div class="hero-body" id="modalIntro">Latest insights for your home.</div>
         </div>
 
-        <!-- Category layout -->
-        <div class="modal-masonry hidden" id="modalMasonry">
-          <section class="modal-section theme-security">
-            <h3><i class="mdi mdi-shield-home-outline"></i>Security</h3>
-            <div class="section-body" id="secSecurity">Nothing to report.</div>
-          </section>
-
-          <section class="modal-section theme-comfort">
-            <h3><i class="mdi mdi-thermometer"></i>Comfort</h3>
-            <div class="section-body" id="secComfort">Nothing to report.</div>
-            <div class="section-chart"><canvas id="chartTemp"></canvas></div>
-          </section>
-
-          <section class="modal-section theme-energy">
-            <h3><i class="mdi mdi-flash"></i>Energy</h3>
-            <div class="section-body" id="secEnergy">Nothing to report.</div>
-          </section>
-
-          <section class="modal-section theme-anomalies">
-            <h3><i class="mdi mdi-alert-decagram-outline"></i>Anomalies</h3>
-            <div class="section-body" id="secAnomalies">Nothing to report.</div>
-          </section>
-
-          <section class="modal-section theme-reco">
-            <h3><i class="mdi mdi-lightbulb-on-outline"></i>Actions to take</h3>
-            <div class="section-body" id="secActions">Nothing to report.</div>
-          </section>
-        </div>
-
-        <!-- Visible summary -->
+        <!-- Sections get injected -->
         <div id="modalSummary" class="prose prose-invert max-w-none whitespace-pre-wrap leading-relaxed"></div>
-        <!-- Hidden alias for legacy code -->
         <div id="summary" class="sr-only"></div>
       </div>
     </div>
   </div>
 
-<!-- Feedback dialog -->
-<dialog id="dlg-feedback" class="card rounded-xl p-6 text-gray-200 max-w-xl w-full">
-  <form id="fb-form" method="dialog" class="space-y-4">
-    <h3 class="text-lg font-extrabold">Send feedback</h3>
-
-    <!-- Context surface -->
-    <div class="text-xs text-gray-400 leading-relaxed" id="fb-context" aria-live="polite"></div>
-
-    <!-- Kind -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-      <label class="block">
-        <span class="text-sm text-gray-300">Type</span>
-        <select id="fb-kind" class="input mt-1 w-full">
-          <option value="context">Context / Note</option>
-          <option value="correction">Correction</option>
-          <option value="ignore">Mark as noise</option>
-        </select>
-      </label>
-
-      <label class="block">
-        <span class="text-sm text-gray-300">Category</span>
-        <select id="fb-category" class="input mt-1 w-full">
-          <option>security</option>
-          <option>comfort</option>
-          <option>energy</option>
-          <option>anomalies</option>
-          <option>actions</option>
-          <option>generic</option>
-        </select>
-      </label>
-    </div>
-
-    <!-- Note -->
-    <label class="block">
-      <span class="text-sm text-gray-300">Your note</span>
-      <textarea id="fb-text" rows="4" class="input mt-1 w-full" placeholder="Add a short note that will help future analyses…"></textarea>
-    </label>
-
-    <!-- Hidden metadata (filled from JS) -->
-    <input type="hidden" id="fb-analysis-id" />
-    <input type="hidden" id="fb-event-id" />
-    <input type="hidden" id="fb-body" />
-
-    <!-- Buttons -->
-    <div class="flex items-center justify-end gap-2 pt-2">
-      <button type="button" id="fb-cancel" class="btn btn-ghost"><i class="mdi mdi-close"></i>Cancel</button>
-      <button type="submit" id="fb-submit" class="btn"><i class="mdi mdi-send"></i>Submit</button>
-    </div>
-
-    <!-- Result area -->
-    <div id="fb-result" class="text-sm text-gray-400"></div>
-  </form>
-</dialog>
-
-
-<!-- Modal Overlay 
-<div id="detailsOverlay" class="overlay hidden">
-  <div id="overlayBackdrop" class="overlay-backdrop"></div>
-  <div class="overlay-content">
-    <button id="modalClose" class="modal-close">&times;</button>
-    <h2 id="modalTitle"></h2>
-    <div id="modalMeta" class="modal-meta"></div>
-    <div id="modalSummary" class="modal-body"></div>
-  </div>
-</div>
--->
   <!-- Bridge for legacy IDs -->
   <script>
     (function () {
@@ -349,10 +285,9 @@
 
         sync();
       }
-
-      ensureAlias('title',   'modalTitle');
-      ensureAlias('meta',    'modalMeta');
-      ensureAlias('summary', 'modalSummary');
+      ensureAlias('title','modalTitle');
+      ensureAlias('meta','modalMeta');
+      ensureAlias('summary','modalSummary');
     })();
   </script>
 

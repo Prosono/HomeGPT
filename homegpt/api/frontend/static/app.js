@@ -1126,79 +1126,91 @@ async function toggleMode() {
   await loadStatus();
 }
 
+// --- helpers for pills + paging
+const cap = s => (s||"").charAt(0).toUpperCase() + (s||"").slice(1);
+function pillClassForCategory(cat="") {
+  const key = canonicalizeTitle(cat); // you already have this
+  switch(key){
+    case "security":  return "pill pill-sec";
+    case "comfort":   return "pill pill-comf";
+    case "energy":    return "pill pill-ener";
+    case "anomalies": return "pill pill-ano";
+    case "presence":  return "pill pill-pres";
+    case "actions":   return "pill pill-reco";
+    default:          return "pill";
+  }
+}
+
+let EV_CACHE = [];
+let EV_PAGE = 1;
+const EV_PAGE_SIZE = 15;
+
 async function loadEvents() {
   const since = new Date(Date.now() - 24*3600*1000).toISOString();
-  const rows = await jsonFetch(api(`events?since=${encodeURIComponent(since)}&limit=200`)) || [];
+  const rows = await jsonFetch(api(`events?since=${encodeURIComponent(since)}&limit=500`)) || [];
+  EV_CACHE = rows;
+  renderEventsPage(1);
+}
+
+function renderEventsPage(page){
   const box = document.getElementById("eventsList");
+  const pager = document.getElementById("eventsPager");
   if (!box) return;
 
-  box.innerHTML = ""; // clear
+  const total = EV_CACHE.length;
+  const pages = Math.max(1, Math.ceil(total / EV_PAGE_SIZE));
+  EV_PAGE = Math.min(pages, Math.max(1, page||1));
 
-  rows.forEach((ev) => {
-    const wrap = document.createElement("div");
-    wrap.className = "py-2 flex flex-col gap-2 border-b border-white/5";
+  const start = (EV_PAGE-1)*EV_PAGE_SIZE;
+  const slice = EV_CACHE.slice(start, start + EV_PAGE_SIZE);
 
-    // top line
-    const top = document.createElement("div");
-    top.className = "flex items-start gap-3";
+  box.innerHTML = slice.map(ev => {
+    const pillCls = pillClassForCategory(ev.category);
+    const pillTxt = cap(ev.category || "generic");
+    const title   = escapeHtml(ev.title || "Event");
+    const body    = escapeHtml(ev.body  || "");
+    const when    = new Date(ev.ts).toLocaleString();
+    const bodyJson = JSON.stringify(ev.body || "");
 
-    const ts = document.createElement("div");
-    ts.className = "min-w-[10ch] text-gray-400";
-    ts.textContent = new Date(ev.ts).toLocaleString();
+    return `
+      <div class="event-row">
+        <!-- left: time + pill -->
+        <div class="event-meta">
+          <div class="event-time">${when}</div>
+          <span class="${pillCls}">${pillTxt}</span>
+        </div>
 
-    const chip = document.createElement("span");
-    chip.className = "chip";
-    chip.textContent = ev.category;
+        <!-- middle: title + body + feedback list -->
+        <div class="event-main">
+          <div class="title">${title}</div>
+          <div class="body">${body}</div>
+          <div id="fb-list-${ev.id}" class="hidden mt-2"></div>
+        </div>
 
-    const main = document.createElement("div");
-    main.className = "flex-1";
-    const title = document.createElement("div");
-    title.className = "font-medium";
-    title.textContent = ev.title || "Event";
-    const body = document.createElement("div");
-    body.className = "text-gray-400";
-    body.textContent = ev.body || "";
-    main.appendChild(title);
-    main.appendChild(body);
+        <!-- right: actions -->
+        <div class="event-actions">
+          <button class="chip"
+            onclick="openFeedbackDialog({analysis_id:${ev.analysis_id}, event_id:${ev.id}, category:'${ev.category}', body:${bodyJson}})">
+            Add feedback
+          </button>
+          <button class="chip" onclick="toggleFeedbackList(${ev.id})">
+            View feedback (${ev.feedback_count || 0})
+          </button>
+        </div>
+      </div>
+    `;
+  }).join("");
 
-    top.appendChild(ts);
-    top.appendChild(chip);
-    top.appendChild(main);
-
-    // buttons
-    const btnRow = document.createElement("div");
-    btnRow.className = "flex gap-2 pl-[10ch]";
-
-    const addBtn = document.createElement("button");
-    addBtn.className = "chip";
-    addBtn.textContent = "Add feedback";
-    addBtn.addEventListener("click", () => {
-      openFeedbackDialog({
-        analysis_id: ev.analysis_id,
-        event_id: ev.id,
-        category: ev.category,
-        body: ev.body || ""
-      });
-    });
-
-    const viewBtn = document.createElement("button");
-    viewBtn.className = "chip";
-    viewBtn.textContent = `View feedback (${ev.feedback_count || 0})`;
-    viewBtn.addEventListener("click", () => toggleFeedbackList(ev.id));
-
-    btnRow.appendChild(addBtn);
-    btnRow.appendChild(viewBtn);
-
-    // feedback list container
-    const fbList = document.createElement("div");
-    fbList.id = `fb-list-${ev.id}`;
-    fbList.className = "hidden mt-1 pl-[10ch]";
-
-    wrap.appendChild(top);
-    wrap.appendChild(btnRow);
-    wrap.appendChild(fbList);
-    box.appendChild(wrap);
-  });
+  // pagination controls
+  if (pager){
+    pager.innerHTML = `
+      <button class="pager-btn" ${EV_PAGE<=1?'disabled':''}
+        onclick="renderEventsPage(${EV_PAGE-1})">Prev</button>
+      <span class="pager-meta">Page ${EV_PAGE} of ${pages} • ${total} events</span>
+      <button class="pager-btn" ${EV_PAGE>=pages?'disabled':''}
+        onclick="renderEventsPage(${EV_PAGE+1})">Next</button>
+    `;
+  }
 }
 
 

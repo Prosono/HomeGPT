@@ -861,3 +861,38 @@ p:hover .feedback-btn {
   border: 2px solid transparent;
   background-clip: content-box;
 }
+
+/* ===== Events list layout ===== */
+#eventsList .event-row{
+  display:grid;
+  grid-template-columns: 200px 1fr auto;
+  gap:14px;
+  padding:12px 0;
+  border-bottom:1px solid rgba(255,255,255,.06);
+}
+#eventsList .event-meta{display:flex; flex-direction:column; gap:6px; min-width:0}
+#eventsList .event-time{color:#94a3b8; font-size:12.5px}
+#eventsList .event-main .title{font-weight:600}
+#eventsList .event-main .body{color:#94a3b8}
+
+/* actions on the right */
+#eventsList .event-actions{
+  display:flex; align-items:flex-start; gap:8px; padding-top:2px;
+}
+
+/* Reuse your existing .pill styles; only add spacing here */
+#eventsList .pill{display:inline-flex; align-items:center; gap:6px}
+
+/* Pagination */
+#eventsPager{display:flex; justify-content:center; align-items:center; gap:10px; padding:10px 0}
+#eventsPager .pager-btn{
+  border:1px solid rgba(255,255,255,.12);
+  background:#0f172a; color:#e5e7eb; padding:8px 12px; border-radius:10px; cursor:pointer
+}
+#eventsPager .pager-btn[disabled]{opacity:.45; cursor:not-allowed}
+#eventsPager .pager-meta{color:#94a3b8; font-size:12.5px}
+
+@media (max-width: 860px){
+  #eventsList .event-row{grid-template-columns: 1fr}
+  #eventsList .event-actions{justify-content:flex-start; padding-left:0}
+}
