@@ -1145,73 +1145,83 @@ let EV_CACHE = [];
 let EV_PAGE = 1;
 const EV_PAGE_SIZE = 15;
 
-async function loadEvents() {
-  const since = new Date(Date.now() - 24*3600*1000).toISOString();
-  const rows = await jsonFetch(api(`events?since=${encodeURIComponent(since)}&limit=500`)) || [];
-  EV_CACHE = rows;
-  renderEventsPage(1);
-}
-
-function renderEventsPage(page){
-  const box = document.getElementById("eventsList");
-  const pager = document.getElementById("eventsPager");
-  if (!box) return;
-
-  const total = EV_CACHE.length;
-  const pages = Math.max(1, Math.ceil(total / EV_PAGE_SIZE));
-  EV_PAGE = Math.min(pages, Math.max(1, page||1));
-
-  const start = (EV_PAGE-1)*EV_PAGE_SIZE;
-  const slice = EV_CACHE.slice(start, start + EV_PAGE_SIZE);
-
-  box.innerHTML = slice.map(ev => {
-    const pillCls = pillClassForCategory(ev.category);
-    const pillTxt = cap(ev.category || "generic");
-    const title   = escapeHtml(ev.title || "Event");
-    const body    = escapeHtml(ev.body  || "");
-    const when    = new Date(ev.ts).toLocaleString();
-    const bodyJson = JSON.stringify(ev.body || "");
-
-    return `
-      <div class="event-row">
-        <!-- left: time + pill -->
-        <div class="event-meta">
-          <div class="event-time">${when}</div>
-          <span class="${pillCls}">${pillTxt}</span>
-        </div>
-
-        <!-- middle: title + body + feedback list -->
-        <div class="event-main">
-          <div class="title">${title}</div>
-          <div class="body">${body}</div>
-          <div id="fb-list-${ev.id}" class="hidden mt-2"></div>
-        </div>
-
-        <!-- right: actions -->
-        <div class="event-actions">
-          <button class="chip"
-            onclick="openFeedbackDialog({analysis_id:${ev.analysis_id}, event_id:${ev.id}, category:'${ev.category}', body:${bodyJson}})">
-            Add feedback
-          </button>
-          <button class="chip" onclick="toggleFeedbackList(${ev.id})">
-            View feedback (${ev.feedback_count || 0})
-          </button>
-        </div>
-      </div>
-    `;
-  }).join("");
-
-  // pagination controls
-  if (pager){
-    pager.innerHTML = `
-      <button class="pager-btn" ${EV_PAGE<=1?'disabled':''}
-        onclick="renderEventsPage(${EV_PAGE-1})">Prev</button>
-      <span class="pager-meta">Page ${EV_PAGE} of ${pages} • ${total} events</span>
-      <button class="pager-btn" ${EV_PAGE>=pages?'disabled':''}
-        onclick="renderEventsPage(${EV_PAGE+1})">Next</button>
-    `;
+// Helper: map category → pill class (matches your analysis colors)
+function eventPillClass(cat = "") {
+  switch ((cat || "").toLowerCase()) {
+    case "security":  return "pill pill-sec";
+    case "comfort":   return "pill pill-comf";
+    case "energy":    return "pill pill-ener";
+    case "anomalies": return "pill pill-ano";
+    case "presence":  return "pill pill-pres";
+    case "actions":   return "pill pill-reco";
+    default:          return "pill"; // fallback
   }
 }
+
+// SAFE: no inline JS; all listeners attached programmatically.
+async function loadEvents() {
+  const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+  const rows = await jsonFetch(api(`events?since=${encodeURIComponent(since)}&limit=200`)) || [];
+  const box = document.getElementById("eventsList");
+  if (!box) return;
+
+  box.innerHTML = ""; // clear first
+
+  rows.forEach(ev => {
+    const row = document.createElement("div");
+    row.className = "event-row";
+
+    const ts = ev.ts ? new Date(ev.ts).toLocaleString() : "";
+
+    row.innerHTML = `
+      <div class="event-meta">
+        <div class="event-time">${escapeHtml(ts)}</div>
+        <span class="${eventPillClass(ev.category)}">${escapeHtml(ev.category || "generic")}</span>
+      </div>
+
+      <div class="event-main">
+        <div class="title">${escapeHtml(ev.title || "Event")}</div>
+        <div class="body">${escapeHtml(ev.body || "")}</div>
+      </div>
+
+      <div class="event-actions">
+        <button class="chip js-add">Add feedback</button>
+        <button class="chip js-view">View feedback (${ev.feedback_count || 0})</button>
+      </div>
+
+      <!-- feedback list (toggles open/closed) -->
+      <div id="fb-list-${ev.id}" class="hidden mt-1 col-span-3"></div>
+    `;
+
+    // Attach listeners (no template-string JS in attributes)
+    const addBtn  = row.querySelector(".js-add");
+    const viewBtn = row.querySelector(".js-view");
+
+    if (addBtn) {
+      addBtn.addEventListener("click", () => {
+        if (typeof openFeedbackDialog === "function") {
+          openFeedbackDialog({
+            analysis_id: ev.analysis_id,
+            event_id: ev.id,
+            category: (ev.category || "generic"),
+            body: ev.body || ""
+          });
+        }
+      });
+    }
+
+    if (viewBtn) {
+      viewBtn.addEventListener("click", () => {
+        if (typeof toggleFeedbackList === "function") {
+          toggleFeedbackList(ev.id);
+        }
+      });
+    }
+
+    box.appendChild(row);
+  });
+}
+
 
 
 
