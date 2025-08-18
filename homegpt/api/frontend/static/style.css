@@ -172,11 +172,11 @@ body {
 .modal-hero .hero-head i { font-size: 1.3rem }
 .modal-hero .hero-body { color: var(--fg); opacity: .95 }
 
-/* Masonry */
+/* Masonry 
 .modal-masonry { column-count: 1; column-gap: 14px }
 @media (min-width: 720px)  { .modal-masonry { column-count: 2 } }
 @media (min-width: 1220px) { .modal-masonry { column-count: 3 } }
-
+*/
 .modal-section {
   display: inline-block; width: 100%; break-inside: avoid;
   margin: 0 0 14px;
@@ -514,25 +514,13 @@ p:hover .feedback-btn {
 /* Title + meta */
 .modal-meta { font-size: 0.875rem; color: #9ca3af; margin-bottom: 1rem; }
 
-/* Hero section */
-.modal-hero {
-  padding: 1rem;
-  background: #111827;
-  border-radius: 0.5rem;
-  margin-bottom: 1rem;
-}
-.modal-hero .hero-head {
-  font-weight: bold; font-size: 1.25rem;
-  display: flex; align-items: center; gap: 0.5rem;
-}
-.modal-hero .hero-body { margin-top: 0.5rem; }
-
 /* Masonry sections */
 .modal-masonry {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 1rem;
 }
+/*
 .modal-section {
   padding: 1rem;
   border-radius: 0.5rem;
@@ -543,14 +531,16 @@ p:hover .feedback-btn {
   margin-bottom: 0.5rem;
   font-size: 1.1rem;
 }
+  */
 .section-body { margin-bottom: 0.5rem; }
 .section-chart { height: 120px; }
 
-/* Feedback box */
+/* Feedback box 
 .feedback-box {
   display: flex; flex-direction: column; gap: 0.5rem;
   margin-top: 0.5rem;
 }
+  */
 /* === Feedback Box Styling === */
 .feedback-box {
   margin-top: 0.75rem;
@@ -562,12 +552,12 @@ p:hover .feedback-btn {
   flex-direction: column;
   gap: 0.5rem;
 }
-
+/*
 .feedback-box em {
-  color: #9ca3af; /* grey-400 */
+  color: #9ca3af; /* grey-400 
   font-size: 0.9rem;
 }
-
+*/
 .feedback-text {
   width: 100%;
   min-height: 2.5rem;
