@@ -482,7 +482,7 @@ p:hover .feedback-btn {
   margin-top: 0.25rem;
 }
 
-/* Overlay base */
+/* Overlay base 
 .overlay {
   position: fixed; inset: 0; 
   display: flex; align-items: center; justify-content: center;
@@ -492,11 +492,11 @@ p:hover .feedback-btn {
 .overlay.hidden { display: none; }
 .overlay-backdrop { position: absolute; inset: 0; }
 
-/* Modal box */
+/* Modal box 
 .overlay-content {
   position: relative;
-  background: #1f2937; /* dark gray */
-  color: #f3f4f6;      /* light text */
+  background: #1f2937; /* dark gray 
+  color: #f3f4f6;      /* light text 
   border-radius: 0.75rem;
   max-width: 800px;
   width: 100%;
@@ -505,6 +505,7 @@ p:hover .feedback-btn {
   padding: 1.5rem;
   box-shadow: 0 0 30px rgba(0,0,0,0.5);
 }
+  */
 .modal-close {
   position: absolute; top: 0.75rem; right: 0.75rem;
   background: transparent; border: none; font-size: 2rem; color: #9ca3af;
@@ -933,3 +934,24 @@ p:hover .feedback-btn {
 .section-head .sub{color:#94a3b8; font-size:.78rem}
 
 /* (Events list + pager already in your CSS; nothing else to change) */
+
+
+/* Particles.js background */
+#particles-js{
+  position: fixed;
+  inset: 0;
+  z-index: 0;              /* keep it behind your cards/content */
+  pointer-events: none;    /* clicks pass through */
+  background:
+    radial-gradient(1200px 900px at 15% 0%, #0b1220 0%, transparent 60%),
+    radial-gradient(1200px 900px at 85% 100%, #0a1426 0%, transparent 60%),
+    #060b16;               /* subtle base like HA */
+}
+
+/* Ensure your content stays above */
+header, main, footer, .card, #detailsOverlay { position: relative; z-index: 1; }
+
+/* Honor reduced motion */
+@media (prefers-reduced-motion: reduce){
+  #particles-js{ display: none; }
+}

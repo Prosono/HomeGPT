@@ -20,6 +20,7 @@
 </head>
 <body class="bg-gray-900 text-gray-200 font-sans antialiased selection:bg-indigo-600/30 selection:text-white">
 
+  <div id="particles-js" aria-hidden="true"></div>
   <!-- Animated background (aurora blobs) -->
   <div class="aurora" aria-hidden="true">
     <span class="blob b1"></span>
@@ -236,6 +237,65 @@
       ensureAlias('meta','modalMeta');
       ensureAlias('summary','modalSummary');
     })();
+  </script>
+
+  <!-- particles.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/particles.js@2.0.0/particles.min.js"></script>
+
+  <script>
+  (function () {
+    // Respect reduced motion
+    if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+    particlesJS('particles-js', {
+      "particles": {
+        "number": {
+          "value": 70,
+          "density": { "enable": true, "value_area": 900 }
+        },
+        "color": { "value": ["#60a5fa", "#a78bfa", "#22d3ee", "#ec4899"] }, // brand-y palette
+        "shape": { "type": "circle" },
+        "opacity": {
+          "value": 0.35,
+          "random": true
+        },
+        "size": {
+          "value": 3,
+          "random": true
+        },
+        "line_linked": {
+          "enable": true,
+          "distance": 130,
+          "color": "#8093b6",
+          "opacity": 0.25,
+          "width": 1
+        },
+        "move": {
+          "enable": true,
+          "speed": 1.1,
+          "direction": "none",
+          "random": true,
+          "straight": false,
+          "out_mode": "out",
+          "attract": { "enable": false }
+        }
+      },
+      "interactivity": {
+        "detect_on": "canvas",
+        "events": {
+          "onhover": { "enable": true, "mode": "grab" },
+          "onclick": { "enable": true, "mode": "push" },
+          "resize": true
+        },
+        "modes": {
+          "grab": { "distance": 140, "line_linked": { "opacity": 0.45 } },
+          "bubble": { "distance": 200, "size": 6, "duration": 2, "opacity": 0.4, "speed": 3 },
+          "push": { "particles_nb": 3 }
+        }
+      },
+      "retina_detect": true
+    });
+  })();
   </script>
 
   <!-- App logic -->
