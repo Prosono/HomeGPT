@@ -1524,41 +1524,56 @@ async function openModal(row) {
 
 
 
-// -------- Feedback Manager (UI) --------
-function fbmEsc(s=""){ return (window.escapeHtml ? escapeHtml(s) :
-  s.replace(/[&<>"]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]))); }
+// ===========================
+// Feedback Manager (UI)
+// ===========================
 
-async function loadFeedbacks({ q="", entity_id="", category="" } = {}) {
+// Tiny escape helper (uses your global escapeHtml if present)
+function fbmEsc(s = "") {
+  return (window.escapeHtml
+    ? escapeHtml(s)
+    : String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])));
+}
+
+async function loadFeedbacks({ q = "", entity_id = "", category = "" } = {}) {
   const params = new URLSearchParams();
-  if (q) params.set("q", q);
+  if (q)         params.set("q", q);
   if (entity_id) params.set("entity_id", entity_id);
-  if (category) params.set("category", category);
+  if (category)  params.set("category", category);
   params.set("limit", "500");
-  const url = api(`feedbacks?${params.toString()}`);
-  return await jsonFetch(url) || [];
+  return (await jsonFetch(api(`feedbacks?${params.toString()}`))) || [];
 }
 
 function renderFeedbackList(rows) {
   const box = document.getElementById("fbm-list");
   if (!box) return;
+
   if (!rows.length) {
     box.innerHTML = "<div class='text-gray-400 text-sm'>No feedback found.</div>";
     return;
   }
+
   box.innerHTML = rows.map(r => {
-    const ents = (r.entities || []).map(e=>`<span class="chip">${fbmEsc(e)}</span>`).join(" ");
+    const ents = (r.entities || (r.entity_ids ? r.entity_ids.split(",") : []))
+      .filter(Boolean)
+      .map(e => `<span class="chip">${fbmEsc(e)}</span>`)
+      .join(" ");
+
+    const when = r.ts ? new Date(r.ts).toLocaleString() : "";
+
     return `
-      <div class="p-3 rounded border border-white/10 hover:bg-white/5">
+      <div class="p-3 rounded border border-white/10 hover:bg-white/5" data-id="${r.id}">
         <div class="flex items-start gap-3">
-          <div class="text-xs text-gray-400 min-w-[20ch]">${fbmEsc(r.ts || "")}</div>
+          <div class="text-xs text-gray-400 min-w-[20ch]">${fbmEsc(when)}</div>
           <span class="chip">${fbmEsc(r.category || "generic")}</span>
           <div class="flex-1">
             <div class="text-sm text-gray-300">${fbmEsc(r.title || r.body || "")}</div>
-            <div class="text-sm mt-1">${fbmEsc(r.note || "")}</div>
+            <div class="text-sm mt-1 fbm-note">${fbmEsc(r.note || "")}</div>
             <div class="mt-1 flex flex-wrap gap-1">${ents}</div>
             <div class="mt-2 flex gap-2">
-              <button class="chip" data-edit="${r.id}">Edit</button>
-              <button class="chip" data-open="${r.analysis_id}">Open analysis</button>
+              <button class="chip fbm-edit"   data-edit="${r.id}">Edit</button>
+              <button class="chip fbm-delete" data-del="${r.id}">Delete</button>
+              <button class="chip"            data-open="${r.analysis_id}">Open analysis</button>
             </div>
           </div>
         </div>
@@ -1566,16 +1581,31 @@ function renderFeedbackList(rows) {
     `;
   }).join("");
 
-  // Wire “Edit”
-  box.querySelectorAll("[data-edit]").forEach(btn => {
+  // Edit -> open edit dialog
+  box.querySelectorAll(".fbm-edit").forEach(btn => {
     btn.addEventListener("click", async () => {
       const id = Number(btn.getAttribute("data-edit"));
       const row = await jsonFetch(api(`feedback/${id}`));
-      openFeedbackEditor(row);
+      if (row) openFeedbackEditor(row);
     });
   });
 
-  // Wire “Open analysis” (reuses your modal)
+  // Delete (inline)
+  box.querySelectorAll(".fbm-delete").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const id = Number(btn.getAttribute("data-del"));
+      if (!confirm("Delete this feedback permanently?")) return;
+      try {
+        await jsonFetch(api(`feedback/${id}`), { method: "DELETE" });
+        btn.closest("[data-id]")?.remove();
+      } catch (e) {
+        console.error(e);
+        alert("Failed to delete.");
+      }
+    });
+  });
+
+  // Open related analysis in your existing modal
   box.querySelectorAll("[data-open]").forEach(btn => {
     btn.addEventListener("click", async () => {
       const aid = Number(btn.getAttribute("data-open"));
@@ -1596,22 +1626,42 @@ async function refreshFeedbackManager() {
 function openFeedbackManager() {
   const dlg = document.getElementById("dlg-manage-feedback");
   if (!dlg) return;
-  if (typeof dlg.showModal === "function") dlg.showModal(); else dlg.classList.remove("hidden");
+  if (typeof dlg.showModal === "function") dlg.showModal();
+  else dlg.classList.remove("hidden");
   refreshFeedbackManager().catch(console.error);
 }
 
-// Edit dialog
+// ----- Edit dialog -----
 function openFeedbackEditor(row) {
   const dlg = document.getElementById("dlg-edit-feedback");
   if (!dlg) return;
-  document.getElementById("fbe-id").value   = row.id;
-  document.getElementById("fbe-note").value = row.note || "";
-  document.getElementById("fbe-kind").value = (row.kind || "context");
-  const ents = (row.entities || []).map(e=>`<span class="chip">${fbmEsc(e)}</span>`).join(" ");
-  document.getElementById("fbe-meta").innerHTML =
-    `${fbmEsc(row.ts || "")} • <b>${fbmEsc(row.category || "generic")}</b><br>${fbmEsc(row.title || row.body || "")}<div class="mt-1">${ents}</div>`;
-  document.getElementById("fbe-result").textContent = "";
-  dlg.showModal?.(); dlg.classList.remove("hidden");
+
+  const idEl   = document.getElementById("fbe-id");
+  const noteEl = document.getElementById("fbe-note");
+  const kindEl = document.getElementById("fbe-kind");
+  const metaEl = document.getElementById("fbe-meta");
+  const resEl  = document.getElementById("fbe-result");
+
+  if (idEl)   idEl.value = row.id;
+  if (noteEl) noteEl.value = row.note || "";
+  if (kindEl) kindEl.value = (row.kind || "context");
+
+  const ents = (row.entities || (row.entity_ids ? row.entity_ids.split(",") : []))
+    .filter(Boolean)
+    .map(e => `<span class="chip">${fbmEsc(e)}</span>`)
+    .join(" ");
+
+  const when = row.ts ? new Date(row.ts).toLocaleString() : "";
+
+  if (metaEl) {
+    metaEl.innerHTML = `${fbmEsc(when)} • <b>${fbmEsc(row.category || "generic")}</b><br>${
+      fbmEsc(row.title || row.body || "")
+    }<div class="mt-1">${ents}</div>`;
+  }
+  if (resEl) resEl.textContent = "";
+
+  if (typeof dlg.showModal === "function") dlg.showModal();
+  else dlg.classList.remove("hidden");
 }
 
 async function saveFeedbackEdit() {
@@ -1619,18 +1669,19 @@ async function saveFeedbackEdit() {
   const note = (document.getElementById("fbe-note").value || "").trim();
   const kind = (document.getElementById("fbe-kind").value || "context").trim();
   const resEl = document.getElementById("fbe-result");
+
   try {
     await jsonFetch(api(`feedback/${id}`), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ note, kind })
     });
-    resEl.textContent = "Saved.";
+    if (resEl) resEl.textContent = "Saved.";
     await refreshFeedbackManager();
-    setTimeout(()=> document.getElementById("dlg-edit-feedback").close?.(), 400);
+    setTimeout(() => document.getElementById("dlg-edit-feedback").close?.(), 400);
   } catch (e) {
     console.error(e);
-    resEl.textContent = "Failed to save.";
+    if (resEl) resEl.textContent = "Failed to save.";
   }
 }
 
@@ -1638,35 +1689,61 @@ async function deleteFeedbackEdit() {
   const id = Number(document.getElementById("fbe-id").value);
   const resEl = document.getElementById("fbe-result");
   if (!confirm("Delete this feedback permanently?")) return;
+
   try {
     await jsonFetch(api(`feedback/${id}`), { method: "DELETE" });
-    resEl.textContent = "Deleted.";
+    if (resEl) resEl.textContent = "Deleted.";
     await refreshFeedbackManager();
-    setTimeout(()=> document.getElementById("dlg-edit-feedback").close?.(), 400);
+    setTimeout(() => document.getElementById("dlg-edit-feedback").close?.(), 400);
   } catch (e) {
     console.error(e);
-    resEl.textContent = "Failed to delete.";
+    if (resEl) resEl.textContent = "Failed to delete.";
   }
 }
 
-// Init wiring
-(function initFeedbackManager(){
+// ----- One-time wiring -----
+function initFeedbackManager() {
   const btn = document.getElementById("btn-manage-feedback");
   const dlg = document.getElementById("dlg-manage-feedback");
-  const dlgEdit = document.getElementById("dlg-edit-feedback");
-  if (!btn || !dlg || !dlgEdit) return;
+  const ed  = document.getElementById("dlg-edit-feedback");
 
-  btn.addEventListener("click", openFeedbackManager);
-  document.getElementById("fbm-close").addEventListener("click", ()=> dlg.close?.());
-  document.getElementById("fbm-refresh").addEventListener("click", ()=> refreshFeedbackManager());
-  document.getElementById("fbm-search").addEventListener("keydown", e => { if (e.key === "Enter") refreshFeedbackManager(); });
-  document.getElementById("fbm-entity").addEventListener("keydown", e => { if (e.key === "Enter") refreshFeedbackManager(); });
-  document.getElementById("fbm-category").addEventListener("change", ()=> refreshFeedbackManager());
+  if (btn) {
+    btn.addEventListener("click", () => {
+      console.log("Opening Feedback Manager…");
+      openFeedbackManager();
+    });
+  }
 
-  document.getElementById("fbe-save").addEventListener("click", saveFeedbackEdit);
-  document.getElementById("fbe-delete").addEventListener("click", deleteFeedbackEdit);
-  document.getElementById("fbe-cancel").addEventListener("click", ()=> dlgEdit.close?.());
-})();
+  // Filters / refresh
+  document.getElementById("fbm-refresh")?.addEventListener("click", refreshFeedbackManager);
+  document.getElementById("fbm-search")?.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); refreshFeedbackManager(); }
+  });
+  document.getElementById("fbm-entity")?.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") { ev.preventDefault(); refreshFeedbackManager(); }
+  });
+  document.getElementById("fbm-category")?.addEventListener("change", refreshFeedbackManager);
+
+  // Close manager dialog
+  document.getElementById("fbm-close")?.addEventListener("click", () => {
+    dlg?.close?.(); dlg?.classList?.add("hidden");
+  });
+
+  // Edit dialog buttons
+  document.getElementById("fbe-save")?.addEventListener("click", saveFeedbackEdit);
+  document.getElementById("fbe-delete")?.addEventListener("click", deleteFeedbackEdit);
+  document.getElementById("fbe-cancel")?.addEventListener("click", () => {
+    ed?.close?.(); ed?.classList?.add("hidden");
+  });
+
+  // ESC to close dialogs
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (ed && !ed.open) return;
+    ed?.close?.(); ed?.classList?.add("hidden");
+    dlg?.close?.(); dlg?.classList?.add("hidden");
+  });
+}
 
 
 
@@ -1683,6 +1760,7 @@ function init() {
   // wire up buttons
   $("toggleMode").addEventListener("click", toggleMode);
   $("runAnalysis").addEventListener("click", runAnalysisNow);
+  initFeedbackManager();
 
   // initial loads
   loadStatus().catch(console.error);

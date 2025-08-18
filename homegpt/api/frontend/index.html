@@ -118,6 +118,8 @@
     </div>
 
 
+
+    <!-- Event dialog -->
     <dialog id="dlg-manage-feedback" class="modal">
       <div class="modal-head">
         <h3 class="text-lg font-semibold">Feedback Manager</h3>
@@ -137,6 +139,29 @@
 
       <div id="fbm-list" class="space-y-2 max-h-[60vh] overflow-auto"></div>
     </dialog>
+
+
+    <!-- Edit Event dialog -->
+    <dialog id="dlg-edit-feedback" class="modal">
+      <h3 class="text-lg font-semibold mb-2">Edit feedback</h3>
+      <input id="fbe-id" type="hidden" />
+      <div class="text-sm text-gray-400 mb-2" id="fbe-meta"></div>
+      <label class="block text-sm mb-1">Note</label>
+      <textarea id="fbe-note" class="input" rows="4"></textarea>
+      <label class="block text-sm mt-2 mb-1">Kind</label>
+      <select id="fbe-kind" class="input">
+        <option value="context">context</option>
+        <option value="correction">correction</option>
+        <option value="preference">preference</option>
+      </select>
+      <div class="mt-3 flex gap-2">
+        <button id="fbe-save" class="chip">Save</button>
+        <button id="fbe-delete" class="chip">Delete…</button>
+        <button id="fbe-cancel" class="chip">Cancel</button>
+      </div>
+      <div id="fbe-result" class="text-sm mt-2"></div>
+    </dialog>
+
 
       <!-- Analysis Heatmap -->
       <div class="mb-6">
@@ -289,7 +314,7 @@
 </dialog>
 
 
-<!-- Modal Overlay -->
+<!-- Modal Overlay 
 <div id="detailsOverlay" class="overlay hidden">
   <div id="overlayBackdrop" class="overlay-backdrop"></div>
   <div class="overlay-content">
@@ -299,6 +324,7 @@
     <div id="modalSummary" class="modal-body"></div>
   </div>
 </div>
+-->
   <!-- Bridge for legacy IDs -->
   <script>
     (function () {
