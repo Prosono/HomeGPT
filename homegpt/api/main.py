@@ -64,6 +64,7 @@ STATE_MAX_CHARS   = 6000   # ≈1500 tokens
 HISTORY_MAX_CHARS = 9000   # ≈2250 tokens
 EVENTS_MAX_CHARS  = 3000   # ≈ 750 tokens
 TOTAL_MAX_CHARS   = 26000  # ≈6500 tokens (final guardrail for the whole user prompt)
+CONTEXT_MAX_CHARS = 2000   # = 500 token  - User Feedback tokens
 
 # ---------- History Compressor (signal-preserving) ----------
 
@@ -575,25 +576,64 @@ def _extract_followups(aid: int, ts: str, summary: str):
         rows.append((aid, ts, label.strip()[:255], code))
     return rows
 
+def _build_context_memos_block(entity_ids: list[str]) -> str:
+    """
+    Pull recent user feedback (memos), prioritizing memos that mention the same
+    entity_ids, plus generic memos for each category.
+    Returns a small markdown block grouped by category.
+    """
+    cats = ["security", "comfort", "energy", "anomalies", "presence"]
+    sections: list[str] = []
 
-def compose_user_prompt(*, lang: str, hours: int | None, topo: str, state_block: str, history_block: str, events_block: str = "") -> str:
+    for cat in cats:
+        try:
+            memos = _load_context_memos(entity_ids, cat)  # entity-targeted first, then generic
+            # keep it tight so it doesn't dominate the prompt
+            memos = list(dict.fromkeys([m.strip() for m in memos if m and m.strip()]))[:6]
+            if memos:
+                body = "\n".join(f"- {m}" for m in memos)
+                sections.append(f"### {cat.title()}\n{body}")
+        except Exception:
+            continue
+
+    block = "\n\n".join(sections)
+    return clamp_chars(block, CONTEXT_MAX_CHARS)
+
+def compose_user_prompt(
+    *,
+    lang: str,
+    hours: int | None,
+    topo: str,
+    state_block: str,
+    history_block: str,
+    events_block: str = "",
+    context_block: str = "",
+) -> str:
     topo          = clamp_chars(strip_noise(topo), TOPO_MAX_CHARS)
     state_block   = clamp_chars(strip_noise(state_block), STATE_MAX_CHARS)
     history_block = clamp_chars(history_block, HISTORY_MAX_CHARS)
     events_block  = clamp_chars(events_block, EVENTS_MAX_CHARS) if events_block else ""
+    context_block = clamp_chars(context_block, CONTEXT_MAX_CHARS) if context_block else ""
 
     header = (
         f"Language: {lang}.\n"
-        "First, topology; then CURRENT STATE; then compressed history"
-        + ("; then recent events" if events_block else "")
-        + ". Use CURRENT STATE as ground truth (avoid guessing).\n\n"
+        "Use CURRENT STATE as ground truth. Be concise and actionable.\n"
+        "If USER CONTEXT MEMOS conflict with weak/ambiguous signals, prefer the memos.\n\n"
     )
 
-    body = f"{topo}\n\n{state_block}\n\n{history_block}\n\n"
+    # Order: context (if any) → topology → state → history → events
+    body_parts = []
+    if context_block:
+        body_parts.append("USER CONTEXT MEMOS (from prior feedback):\n" + context_block)
+    body_parts.append(topo)
+    body_parts.append(state_block)
+    body_parts.append(history_block)
     if events_block:
-        body += "EVENTS:\n" + events_block
+        body_parts.append("EVENTS:\n" + events_block)
 
+    body = "\n\n".join(body_parts)
     return clamp_chars(header + body, TOTAL_MAX_CHARS)
+
 
 def _parse_iso_aware(s: str) -> datetime:
     # HA returns ISO like '2025-08-11T06:23:10+00:00' or without tz.
@@ -816,17 +856,19 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                 all_states = await ha.states()
                 state_block = pack_states_for_prompt(all_states, max_lines=STATE_MAX_LINES)
 
-                # ----- History -----
+                # ----- History window -----
                 cfg_hours = int(cfg.get("history_hours", DEFAULT_HISTORY_HOURS))
                 now = datetime.now(timezone.utc).replace(microsecond=0)
                 start = (now - timedelta(hours=cfg_hours)).replace(microsecond=0)
 
-                entity_ids = [e["entity_id"] for e in events[-10:]]
+                # Prefer recent event entities for history; fall back to a subset of states
+                entity_ids = [e["entity_id"] for e in events[-10:] if e.get("entity_id")]
                 if not entity_ids:
                     entity_ids = sorted({s.get("entity_id") for s in all_states if s.get("entity_id")})[:300]
 
                 logger.info("History query: %d ids (first 15): %s", len(entity_ids), entity_ids[:15])
 
+                # ----- History fetch (with permissive fallback) -----
                 try:
                     hist = await ha.history_period(
                         start.isoformat(timespec="seconds"),
@@ -851,6 +893,7 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                         logger.warning("History fetch failed (second attempt): %s", e2)
                         hist = []
 
+                # Diagnostics
                 try:
                     groups = len(hist) if isinstance(hist, list) else 0
                     rows = sum(len(g) for g in hist if isinstance(g, list))
@@ -858,6 +901,7 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                 except Exception:
                     pass
 
+                # ----- History compression -----
                 try:
                     history_block = compress_history_for_prompt(
                         hist,
@@ -869,14 +913,37 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                     logger.warning("History pack failed: %s", e)
                     history_block = "(history unavailable)"
 
-                # ----- Event bullets -----
+                # ----- Event bullets (from the snapshot) -----
                 bullets = [
                     f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
                     for e in events[-AUTO_ANALYSIS_EVENT_THRESHOLD:]
                 ]
                 events_block = "\n".join(bullets) if bullets else "(none)"
 
-                # ----- User prompt -----
+                # ----- USER CONTEXT MEMOS (entity-targeted + generic) -----
+                # Use *all* event entity_ids we have to fetch targeted memos
+                entity_ids_for_context = sorted({e.get("entity_id") for e in events if e.get("entity_id")})
+                try:
+                    # Preferred helper, if you added it
+                    context_block = _build_context_memos_block(entity_ids_for_context)  # type: ignore[name-defined]
+                except NameError:
+                    # Fallback inline builder using _load_context_memos
+                    try:
+                        cats = ["security", "comfort", "energy", "anomalies", "presence"]
+                        parts = []
+                        for cat in cats:
+                            memos = _load_context_memos(entity_ids_for_context, cat)
+                            memos = list(dict.fromkeys([m.strip() for m in memos if m and m.strip()]))[:6]
+                            if memos:
+                                parts.append("### " + cat.title() + "\n" + "\n".join(f"- {m}" for m in memos))
+                        block = "\n\n".join(parts)
+                        # keep tight; don't let memos dominate the prompt
+                        context_block = clamp_chars(block, 2000)
+                    except Exception:
+                        context_block = ""
+                logger.info("Context memos included: %d chars", len(context_block or ""))
+
+                # ----- Compose user prompt (now includes context_block) -----
                 user = compose_user_prompt(
                     lang=cfg.get("language", "en"),
                     hours=cfg_hours,
@@ -884,13 +951,15 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                     state_block=state_block,
                     history_block=history_block,
                     events_block=events_block,
+                    context_block=context_block,
                 )
 
+                # ----- Model call -----
                 summary = gpt.complete_text(SYSTEM_PASSIVE, user)
                 actions = []
 
             else:
-                # ----- Active mode -----
+                # ----- Active mode (JSON action plan) -----
                 states = await ha.states()
                 lines = [f"{s['entity_id']}={s['state']}" for s in states[:400]]
                 user = f"Mode: {mode}\nCurrent states (subset):\n" + "\n".join(lines)
@@ -922,8 +991,9 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                     events
                 )
                 c.commit()
-        fups = _extract_followups(row_id, row_ts, summary)
 
+        # Follow-ups
+        fups = _extract_followups(row_id, row_ts, summary)
         if fups:
             with db._conn() as c:
                 c.executemany(
@@ -945,6 +1015,7 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
                 pass
 
     return {"summary": summary, "actions": actions, "row": row}
+
 
 
 #@app.post("/api/feedback")
@@ -1076,7 +1147,8 @@ def run_followup(payload: FollowupRunRequest):
 async def run_history(hours: int = Query(..., ge=1, le=48)):
     """
     Analyze the last N hours of history for (almost) all entities.
-    History is pulled in chunks and compressed before sending to the model.
+    Pulls topology + current states, fetches history in chunks, compresses it,
+    injects USER CONTEXT MEMOS (feedback) into the prompt, then runs the model.
     """
     cfg = _load_config()
     mode = "passive"
@@ -1088,21 +1160,19 @@ async def run_history(hours: int = Query(..., ge=1, le=48)):
             ha = HAClient()
             gpt = OpenAIClient(model=cfg.get("model"))
             try:
-                # Topology
+                # 1) Topology
                 topo = await fetch_topology_snapshot(ha, max_lines=TOPO_MAX_LINES)
 
-                # CURRENT STATE
+                # 2) CURRENT STATE
                 all_states = await ha.states()
                 state_block = pack_states_for_prompt(all_states, max_lines=STATE_MAX_LINES)
 
-                # TIME WINDOW
+                # 3) TIME WINDOW
                 now = datetime.now(timezone.utc).replace(microsecond=0)
                 start = (now - timedelta(hours=int(hours))).replace(microsecond=0)
 
-                # Chunk size & caps (configurable)
+                # 4) History for (almost) all entities, chunked
                 chunk_size = int(cfg.get("history_chunk_size", 150))
-
-                # ALL-entities history (chunked)
                 hist = await _fetch_history_all_entities(
                     ha,
                     all_states=all_states,
@@ -1112,7 +1182,7 @@ async def run_history(hours: int = Query(..., ge=1, le=48)):
                     minimal_response=True,
                 )
 
-                # Pack
+                # 5) Compress history for the prompt
                 try:
                     history_block = compress_history_for_prompt(
                         hist,
@@ -1124,16 +1194,46 @@ async def run_history(hours: int = Query(..., ge=1, le=48)):
                     logger.warning("History pack failed: %s", e)
                     history_block = "(history unavailable)"
 
-                # Compose prompt (no recent EVENT_BUFFER here by design)
+                # 6) Build USER CONTEXT MEMOS (entity-targeted + generic per category)
+                # Use all visible entity_ids (clamped) so memos relevant to these devices/categories are included.
+                max_all_entities = int(cfg.get("history_all_max_entities", 600))
+                entity_ids_for_context = [
+                    s.get("entity_id") for s in all_states if s.get("entity_id")
+                ][:max_all_entities]
+
+                try:
+                    # Preferred helper if you added it (formats + clamps internally)
+                    context_block = _build_context_memos_block(entity_ids_for_context)  # type: ignore[name-defined]
+                except NameError:
+                    # Fallback inline builder using _load_context_memos + clamp_chars
+                    try:
+                        cats = ["security", "comfort", "energy", "anomalies", "presence"]
+                        parts = []
+                        for cat in cats:
+                            memos = _load_context_memos(entity_ids_for_context, cat)
+                            # de-dupe + clamp count per category
+                            memos = list(dict.fromkeys([m.strip() for m in memos if m and m.strip()]))[:6]
+                            if memos:
+                                parts.append("### " + cat.title() + "\n" + "\n".join(f"- {m}" for m in memos))
+                        block = "\n\n".join(parts)
+                        context_block = clamp_chars(block, 2000)
+                    except Exception:
+                        context_block = ""
+
+                logger.info("Context memos included (history run): %d chars", len(context_block or ""))
+
+                # 7) Compose prompt (no recent EVENT_BUFFER here by design)
                 user = compose_user_prompt(
                     lang=cfg.get("language", "en"),
                     hours=hours,
                     topo=topo,
                     state_block=state_block,
                     history_block=history_block,
+                    events_block="(none)",        # history run intentionally omits live event bullets
+                    context_block=context_block,  # NEW
                 )
 
-
+                # 8) Call the text model
                 summary = gpt.complete_text(SYSTEM_PASSIVE, user)
                 actions: list = []
 
@@ -1143,12 +1243,13 @@ async def run_history(hours: int = Query(..., ge=1, le=48)):
             summary = f"History analysis for {hours} hours (simulated)."
             actions = []
 
-        # Persist just like /api/run
+        # 9) Persist (same as /api/run)
         row = db.add_analysis(mode, focus, summary, json.dumps(actions))
 
-        # homegpt/api/main.py – after inserting events in /api/run
         if isinstance(row, (list, tuple)):
             row_id, row_ts = row[0], row[1]
+
+            # Events
             events = _extract_events_from_summary(row_id, row_ts, summary)
             if events:
                 with db._conn() as c:
@@ -1157,7 +1258,8 @@ async def run_history(hours: int = Query(..., ge=1, le=48)):
                         events
                     )
                     c.commit()
-            # NEW: extract follow‑ups and persist them
+
+            # Followups
             fups = _extract_followups(row_id, row_ts, summary)
             if fups:
                 with db._conn() as c:
@@ -1167,7 +1269,7 @@ async def run_history(hours: int = Query(..., ge=1, le=48)):
                     )
                     c.commit()
 
-        # Notify
+        # 10) Notify
         if HAVE_REAL:
             try:
                 ha_notify = HAClient()
@@ -1180,6 +1282,7 @@ async def run_history(hours: int = Query(..., ge=1, le=48)):
                 except Exception:
                     pass
 
+        # 11) Normalize response for UI
         return {
             "status": "ok",
             "summary": summary,
@@ -1193,6 +1296,7 @@ async def run_history(hours: int = Query(..., ge=1, le=48)):
                 "hours": hours,
                 "chunk_size": int(cfg.get("history_chunk_size", 150)),
                 "max_all_entities": int(cfg.get("history_all_max_entities", 600)),
+                "context_block_len": len(context_block) if 'context_block' in locals() and context_block else 0,
             },
         }
 
@@ -1201,12 +1305,13 @@ async def run_history(hours: int = Query(..., ge=1, le=48)):
         return JSONResponse(status_code=500, content={"status": "error", "message": str(exc)})
 
 
+
 @app.post("/api/run")
 async def run_analysis(request: AnalysisRequest = Body(...)):
     """
     Manual/explicit run from the UI.
     Passive: snapshots event buffer under a lock, clears it, fetches topology,
-             and calls the text model.
+             pulls history, injects context memos, and calls the text model.
     Active : unchanged JSON action planner.
     """
     cfg = _load_config()
@@ -1235,22 +1340,18 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                     all_states = await ha.states()
                     state_block = pack_states_for_prompt(all_states, max_lines=STATE_MAX_LINES)
 
-                    # 4) HISTORY (ALL entities for last N hours)
+                    # 4) HISTORY (prefer recent event entities, else subset of states)
                     cfg_hours = int(_load_config().get("history_hours", DEFAULT_HISTORY_HOURS))
                     now = datetime.now(timezone.utc).replace(microsecond=0)
                     start = (now - timedelta(hours=cfg_hours)).replace(microsecond=0)
-                
-                    # after you have: events, all_states, start, now
 
-                    # ---- Build entity list for history ----
                     entity_ids = sorted({e.get("entity_id") for e in events if e.get("entity_id")})[:100]
                     if not entity_ids:
-                        # fallback: take a subset of current states
                         entity_ids = sorted({s.get("entity_id") for s in all_states if s.get("entity_id")})[:300]
 
-                    logger.info("History query (worker): %d ids (first 15): %s", len(entity_ids), entity_ids[:15])
+                    logger.info("History query (UI run): %d ids (first 15): %s", len(entity_ids), entity_ids[:15])
 
-                    # ---- Fetch history with a permissive fallback ----
+                    # Fetch history with a permissive fallback
                     try:
                         hist = await ha.history_period(
                             start.isoformat(timespec="seconds"),
@@ -1269,21 +1370,21 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                                 entity_ids=entity_ids,
                                 minimal_response=False,
                                 include_start_time_state=True,
-                                significant_changes_only=False,   # most permissive
+                                significant_changes_only=False,  # most permissive
                             )
                         except Exception as e2:
                             logger.warning("History fetch failed (second attempt): %s", e2)
                             hist = []
 
-                    # ---- Diagnostics: what did we actually get? ----
+                    # Diagnostics
                     try:
                         groups = len(hist) if isinstance(hist, list) else 0
                         rows = sum(len(g) for g in hist if isinstance(g, list))
-                        logger.info("History fetched for prompt (worker): groups=%d total_rows=%d", groups, rows)
+                        logger.info("History fetched for prompt (UI run): groups=%d total_rows=%d", groups, rows)
                     except Exception:
                         pass
 
-                    # ✅ always set history_block
+                    # 5) Compress history (always set history_block)
                     try:
                         history_block = compress_history_for_prompt(
                             hist,
@@ -1295,14 +1396,36 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                         logger.warning("History pack failed: %s", e)
                         history_block = "(history unavailable)"
 
-                    # 5) Recent event bullets from the snapshot we took
+                    # 6) Recent event bullets (from the snapshot we took)
                     bullets = [
                         f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
                         for e in events
                     ]
                     events_block = "\n".join(bullets) if bullets else "(none)"
 
-                    # 6) Compose prompt
+                    # 7) USER CONTEXT MEMOS (entity-targeted + generic per category)
+                    # Use all event entity_ids (or fall back to history entity_ids) to scope the memos
+                    entity_ids_for_context = sorted({e.get("entity_id") for e in events if e.get("entity_id")}) or entity_ids
+                    try:
+                        # If you created a helper that formats + clamps:
+                        context_block = _build_context_memos_block(entity_ids_for_context)  # type: ignore[name-defined]
+                    except NameError:
+                        # Fallback: inline build using _load_context_memos
+                        try:
+                            cats = ["security", "comfort", "energy", "anomalies", "presence"]
+                            parts = []
+                            for cat in cats:
+                                memos = _load_context_memos(entity_ids_for_context, cat)
+                                memos = list(dict.fromkeys([m.strip() for m in memos if m and m.strip()]))[:6]
+                                if memos:
+                                    parts.append("### " + cat.title() + "\n" + "\n".join(f"- {m}" for m in memos))
+                            block = "\n\n".join(parts)
+                            context_block = clamp_chars(block, 2000)  # keep tight
+                        except Exception:
+                            context_block = ""
+                    logger.info("Context memos included (UI run): %d chars", len(context_block or ""))
+
+                    # 8) Compose prompt (now includes context_block)
                     user = compose_user_prompt(
                         lang=cfg.get("language", "en"),
                         hours=cfg_hours,
@@ -1310,9 +1433,10 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                         state_block=state_block,
                         history_block=history_block,
                         events_block=events_block,
+                        context_block=context_block,   # <— new
                     )
 
-                    # 7) Call the text model
+                    # 9) Call the text model
                     summary = gpt.complete_text(SYSTEM_PASSIVE, user)
                     actions = []
 
@@ -1329,14 +1453,14 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                 await ha.close()
 
         else:
+            # Fallback (mocked)
             summary = f"Analysis in {mode} mode. Focus: {focus or 'General'}."
             actions = ["light.turn_off living_room", "climate.set_temperature bedroom 20°C"]
 
         # Persist the analysis
         row = db.add_analysis(mode, focus, summary, json.dumps(actions))
 
-
-        # Extract events + followups, same as run_history
+        # Extract events + followups (same as run_history)
         if isinstance(row, (list, tuple)):
             row_id, row_ts = row[0], row[1]
 
@@ -1356,7 +1480,7 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
                 with db._conn() as c:
                     c.executemany(
                         "INSERT INTO followup_requests (analysis_id, ts, label, code) VALUES (?,?,?,?)",
-                        fups
+                        fups,
                     )
                     c.commit()
 
@@ -1388,6 +1512,7 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
     except Exception as exc:
         logger.exception("Error in run_analysis: %s", exc)
         return JSONResponse(status_code=500, content={"status": "error", "message": str(exc)})
+
 
 
 @app.get("/api/history")
