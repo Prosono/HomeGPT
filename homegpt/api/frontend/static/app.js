@@ -198,6 +198,42 @@ function categoryClass(title = "") {
   }
 }
 
+function escapeHtml(s=""){return s.replace(/[&<>"]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));}
+
+async function renderFeedbackListForEvent(eid) {
+  const box = document.getElementById(`fb-list-${eid}`);
+  if (!box) return;
+  box.innerHTML = "<div class='text-gray-400 text-sm'>Loading…</div>";
+  try {
+    const rows = await jsonFetch(api(`feedback?event_id=${eid}&limit=50`)) || [];
+    if (!rows.length) {
+      box.innerHTML = "<div class='text-gray-400 text-sm'>No feedback yet.</div>";
+      return;
+    }
+    box.innerHTML = rows.map(r => `
+      <div class="fb-note py-1">
+        <div class="text-xs text-gray-400">${new Date(r.ts).toLocaleString()} • ${escapeHtml(r.kind || "context")} • ${escapeHtml(r.source || "user")}</div>
+        <div class="text-sm">${escapeHtml(r.note || "")}</div>
+      </div>
+    `).join("");
+  } catch (e) {
+    console.error("feedback load failed:", e);
+    box.innerHTML = "<div class='text-red-400 text-sm'>Failed to load feedback.</div>";
+  }
+}
+
+async function toggleFeedbackList(eid) {
+  const box = document.getElementById(`fb-list-${eid}`);
+  if (!box) return;
+  const hidden = box.classList.contains("hidden");
+  if (hidden && !box.dataset.loaded) {
+    await renderFeedbackListForEvent(eid);
+    box.dataset.loaded = "1";
+  }
+  box.classList.toggle("hidden");
+}
+
+
 // ==== History Analysis UI ====
 (function () {
   // Elements
@@ -863,6 +899,15 @@ function openFeedbackDialog({ analysis_id, category = "generic", body = "", even
       body: JSON.stringify(payload)  // <-- use the form payload you built above
     });
       $("fb-result").textContent = "Thanks — saved!";
+      await loadEvents();     
+      if ($("fb-event-id").value) {
+        const eid = Number($("fb-event-id").value);
+        const box = document.getElementById(`fb-list-${eid}`);
+        if (box && !box.classList.contains("hidden")) {
+          box.dataset.loaded = "";                            // force reload
+          await renderFeedbackListForEvent(eid);
+        }
+      }
       setTimeout(()=> dlg.close(), 600);
     } catch (err) {
       console.error("Feedback error:", err);
@@ -1046,15 +1091,26 @@ async function loadEvents() {
   const rows = await jsonFetch(api(`events?since=${encodeURIComponent(since)}&limit=200`)) || [];
   const box = document.getElementById("eventsList");
   if (!box) return;
+
   box.innerHTML = rows.map(ev => `
-    <div class="py-2 flex items-start gap-3">
-      <div class="min-w-[10ch] text-gray-400">${new Date(ev.ts).toLocaleString()}</div>
-      <span class="chip">${ev.category}</span>
-      <div class="flex-1">
-        <div class="font-medium">${ev.title || 'Event'}</div>
-        <div class="text-gray-400">${ev.body}</div>
+    <div class="py-2 flex flex-col gap-2 border-b border-white/5">
+      <div class="flex items-start gap-3">
+        <div class="min-w-[10ch] text-gray-400">${new Date(ev.ts).toLocaleString()}</div>
+        <span class="chip">${ev.category}</span>
+        <div class="flex-1">
+          <div class="font-medium">${escapeHtml(ev.title || 'Event')}</div>
+          <div class="text-gray-400">${escapeHtml(ev.body || '')}</div>
+        </div>
       </div>
-      <button class="chip" onclick="openFeedbackDialog({analysis_id:${ev.analysis_id}, event_id:${ev.id}, category:'${ev.category}', body:${JSON.stringify(ev.body)}})">Feedback</button>
+      <div class="flex gap-2 pl-[10ch]">
+        <button class="chip" onclick="openFeedbackDialog({analysis_id:${ev.analysis_id}, event_id:${ev.id}, category:'${ev.category}', body:${JSON.stringify(ev.body || '')}})">
+          Add feedback
+        </button>
+        <button class="chip" onclick="toggleFeedbackList(${ev.id})">
+          View feedback (${ev.feedback_count || 0})
+        </button>
+      </div>
+      <div id="fb-list-${ev.id}" class="hidden mt-1 pl-[10ch]"></div>
     </div>
   `).join("");
 }
@@ -1250,31 +1306,123 @@ async function openModal(row) {
       } catch (e) { console.warn("Chart render failed:", e); }
     }
 
-    // Feedback box for event-linked sections
-    if (["Comfort","Security","Anomalies"].includes(t)) {
-      const addFeedbackFor = (el) => {
-        const text = el.textContent.trim();
-        const eventId = eventMap[text];
-        if (!eventId) return;
+    // ----- Inline feedback controls (modal) -----
+    const eligible = new Set(["Comfort","Security","Energy","Anomalies","Presence"]);
+
+    // tiny helpers
+    const norm = (s="") => String(s).replace(/\s+/g," ").trim();
+    const esc  = window.escapeHtml || ((s="") => s.replace(/[&<>"]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])));
+
+    // Build mapping: body -> event (for this analysis only)
+    let evByBody = {};
+    try {
+      const evRows = await jsonFetch(api(`events?since=${encodeURIComponent(row.ts)}&limit=1000`)) || [];
+      evRows
+        .filter(e => e.analysis_id === row.id)
+        .forEach(e => { evByBody[norm(e.body || "")] = e; });
+    } catch { /* non-fatal */ }
+
+    // Load all feedback for this analysis and group by body
+    const fbByBody = new Map();
+    try {
+      const fbs = await jsonFetch(api(`feedback?analysis_id=${row.id}&limit=1000`)) || [];
+      fbs.forEach(f => {
+        const k = norm(f.body || "");
+        if (!fbByBody.has(k)) fbByBody.set(k, []);
+        fbByBody.get(k).push(f);
+      });
+    } catch { /* non-fatal */ }
+
+    function renderFbList(listEl, items) {
+      if (!items || !items.length) {
+        listEl.innerHTML = "<div class='text-gray-400 text-sm'>No feedback yet.</div>";
+        return;
+      }
+      listEl.innerHTML = items.map(r => `
+        <div class="fb-note py-1 border-t border-white/5">
+          <div class="text-xs text-gray-400">
+            ${new Date(r.ts || Date.now()).toLocaleString()} • ${esc(r.kind || "context")}
+          </div>
+          <div class="text-sm">${esc(r.note || "")}</div>
+        </div>
+      `).join("");
+    }
+
+    if (eligible.has(t)) {
+      const addControlsFor = (el) => {
+        const rawText = el.textContent || "";
+        const key = norm(rawText);
+        if (!key) return;
+
+        const ev  = evByBody[key];                       // may be undefined (ok)
+        const arr = fbByBody.get(key) || [];             // existing notes for this bullet
+        const count = arr.length;
+
         const box = document.createElement("div");
         box.className = "feedback-box mt-2";
+
         box.innerHTML = `
-          <textarea class="feedback-text" placeholder="Add feedback about this event..."></textarea>
-          <button class="feedback-submit">Submit Feedback</button>
+          <div class="flex gap-2 items-start">
+            <textarea class="feedback-text flex-1" rows="2" placeholder="Add feedback about this item…"></textarea>
+            <button class="feedback-save chip">Save</button>
+            <button class="feedback-toggle chip">View (${count})</button>
+          </div>
+          <div class="feedback-list hidden mt-2"></div>
         `;
-        box.querySelector(".feedback-submit").addEventListener("click", async () => {
-          const txt = box.querySelector(".feedback-text").value.trim();
-          if (!txt) return;
-          await jsonFetch(api("feedback"), {
-            method: "POST",
-            headers: {"Content-Type":"application/json"},
-            body: JSON.stringify({ event_id: eventId, note: txt })
-          });
-          box.innerHTML = "<em>Thanks for your feedback!</em>";
+
+        // Save handler — backend can resolve event by (analysis_id + body)
+        box.querySelector(".feedback-save").addEventListener("click", async () => {
+          const txtEl = box.querySelector(".feedback-text");
+          const note = (txtEl.value || "").trim();
+          if (!note) return;
+
+          try {
+            await jsonFetch(api("feedback"), {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                event_id: ev?.id,                     // undefined is fine
+                analysis_id: row.id,
+                category: canonicalizeTitle(t),       // e.g. "security"
+                body: key,                             // exact bullet text
+                note,                                  // the user's note
+                kind: "context"
+              })
+            });
+            // optimistic UI update
+            const now = new Date().toISOString();
+            const updated = [{ ts: now, note, kind: "context", body: key }, ...(fbByBody.get(key) || [])];
+            fbByBody.set(key, updated);
+            txtEl.value = "";
+
+            const toggleBtn = box.querySelector(".feedback-toggle");
+            if (toggleBtn) toggleBtn.textContent = `View (${updated.length})`;
+
+            const listEl = box.querySelector(".feedback-list");
+            if (listEl && !listEl.classList.contains("hidden")) {
+              renderFbList(listEl, updated);
+            }
+          } catch (e) {
+            console.error("Save feedback failed:", e);
+            // (optional) show a small error message here
+          }
         });
+
+        // View toggle
+        const listEl = box.querySelector(".feedback-list");
+        box.querySelector(".feedback-toggle").addEventListener("click", async () => {
+          listEl.classList.toggle("hidden");
+          if (!listEl.classList.contains("hidden")) {
+            const items = fbByBody.get(key) || [];
+            renderFbList(listEl, items);
+          }
+        });
+
         el.appendChild(box);
       };
-      card.querySelectorAll("li, p").forEach(addFeedbackFor);
+
+      // Attach to bullet items + paragraphs
+      card.querySelectorAll("li, p").forEach(addControlsFor);
     }
 
     wrap.appendChild(card);

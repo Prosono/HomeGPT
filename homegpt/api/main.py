@@ -1506,31 +1506,7 @@ def get_events(
         logger.exception("Error in /api/events: %s", e)
         raise HTTPException(status_code=500, detail="Failed to fetch events")
 
-@app.get("/api/feedback")
-def list_feedback(
-    event_id: Optional[int] = Query(None),
-    analysis_id: Optional[int] = Query(None),
-    limit: int = Query(50, ge=1, le=500),
-):
-    q = (
-        "SELECT ef.id, ef.event_id, ev.analysis_id, ef.ts, ef.note, ef.kind, "
-        "COALESCE(ef.source,''), ev.category, ev.title, ev.body "
-        "FROM event_feedback ef "
-        "LEFT JOIN analysis_events ev ON ev.id = ef.event_id "
-        "WHERE 1=1"
-    )
-    args = []
-    if event_id:
-        q += " AND ef.event_id=?"; args.append(int(event_id))
-    if analysis_id:
-        q += " AND ev.analysis_id=?"; args.append(int(analysis_id))
-    q += " ORDER BY ef.ts DESC LIMIT ?"; args.append(int(limit))
 
-    with db._conn() as c:
-        rows = c.execute(q, args).fetchall()
-
-    keys = ["id","event_id","analysis_id","ts","note","kind","source","category","title","body"]
-    return [dict(zip(keys, r)) for r in rows]
 
 @app.get("/api/settings")
 def get_settings():
