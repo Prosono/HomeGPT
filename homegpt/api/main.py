@@ -34,7 +34,7 @@ from pydantic import BaseModel
 from fastapi import Query
 from typing import Optional, List
 from fastapi import Body
-from fastapi import Path
+from fastapi import Path as PathParam
 
 import yaml
 from fastapi import FastAPI, Query, Body
@@ -1133,7 +1133,7 @@ def list_feedbacks(
 
 
 @app.get("/api/feedback/{fb_id}")
-def get_feedback(fb_id: int = Path(...)):
+def get_feedback(fb_id: int = PathParam(...)):
     with db._conn() as c:
         r = c.execute(
             "SELECT ef.id, ef.event_id, ef.ts, ef.note, ef.kind, ef.source, "
