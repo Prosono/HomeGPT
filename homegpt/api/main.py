@@ -967,6 +967,51 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
 #        logger.exception("Error in /api/feedback: %s", e)
 #        raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/feedback")
+def get_feedback(
+    analysis_id: Optional[int] = Query(None),
+    event_id: Optional[int] = Query(None),
+    limit: int = Query(200, ge=1, le=1000),
+):
+    """
+    Return feedback notes.
+    - If event_id is given: notes for that single event (joined with analysis_events to include body).
+    - Else if analysis_id is given: all notes for that analysis (joined; includes body).
+    """
+    if not analysis_id and not event_id:
+        raise HTTPException(status_code=400, detail="Provide analysis_id or event_id")
+
+    with db._conn() as c:
+        if event_id:
+            rows = c.execute(
+                """
+                SELECT ef.id, ef.event_id, ef.ts, ef.note, ef.kind, ef.source,
+                       ev.analysis_id, ev.category, ev.body
+                FROM event_feedback ef
+                JOIN analysis_events ev ON ev.id = ef.event_id
+                WHERE ev.id = ?
+                ORDER BY ef.ts DESC
+                LIMIT ?
+                """,
+                (int(event_id), int(limit)),
+            ).fetchall()
+        else:  # analysis_id
+            rows = c.execute(
+                """
+                SELECT ef.id, ef.event_id, ef.ts, ef.note, ef.kind, ef.source,
+                       ev.analysis_id, ev.category, ev.body
+                FROM event_feedback ef
+                JOIN analysis_events ev ON ev.id = ef.event_id
+                WHERE ev.analysis_id = ?
+                ORDER BY ef.ts DESC
+                LIMIT ?
+                """,
+                (int(analysis_id), int(limit)),
+            ).fetchall()
+
+    keys = ["id","event_id","ts","note","kind","source","analysis_id","category","body"]
+    return [dict(zip(keys, r)) for r in rows]
+
 @app.post("/api/feedback")
 def post_feedback_alias(payload: dict = Body(...)):
     # Support legacy {feedback: "..."} too
@@ -1471,7 +1516,7 @@ def get_events(
     category: Optional[str] = Query(None),
     limit: int = Query(200, ge=1, le=1000),
 ):
-    # Normalize 'since' to the same format we store in SQLite (naive ISO)
+    # Normalize 'since'
     if since:
         try:
             s = since.replace("Z", "+00:00")
@@ -1480,27 +1525,27 @@ def get_events(
                 dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
             since = dt.isoformat(timespec="seconds")
         except Exception:
-            # If it's garbage, ignore the filter instead of 500-ing
             since = None
 
     q = (
-        "SELECT id, analysis_id, ts, category, title, body, entity_ids "
-        "FROM analysis_events WHERE 1=1"
+        "SELECT ev.id, ev.analysis_id, ev.ts, ev.category, ev.title, ev.body, ev.entity_ids, "
+        "(SELECT COUNT(*) FROM event_feedback ef WHERE ef.event_id = ev.id) AS feedback_count "
+        "FROM analysis_events ev WHERE 1=1"
     )
     args: list = []
     if category:
-        q += " AND category=?"
+        q += " AND ev.category=?"
         args.append(category)
     if since:
-        q += " AND ts>=?"
+        q += " AND ev.ts>=?"
         args.append(since)
-    q += " ORDER BY ts DESC LIMIT ?"
+    q += " ORDER BY ev.ts DESC LIMIT ?"
     args.append(int(limit))
 
     try:
         with db._conn() as c:
             rows = c.execute(q, args).fetchall()
-        keys = ["id","analysis_id","ts","category","title","body","entity_ids"]
+        keys = ["id","analysis_id","ts","category","title","body","entity_ids","feedback_count"]
         return [dict(zip(keys, r)) for r in rows]
     except Exception as e:
         logger.exception("Error in /api/events: %s", e)

@@ -1132,28 +1132,75 @@ async function loadEvents() {
   const box = document.getElementById("eventsList");
   if (!box) return;
 
-  box.innerHTML = rows.map(ev => `
-    <div class="py-2 flex flex-col gap-2 border-b border-white/5">
-      <div class="flex items-start gap-3">
-        <div class="min-w-[10ch] text-gray-400">${new Date(ev.ts).toLocaleString()}</div>
-        <span class="chip">${ev.category}</span>
-        <div class="flex-1">
-          <div class="font-medium">${escapeHtml(ev.title || 'Event')}</div>
-          <div class="text-gray-400">${escapeHtml(ev.body || '')}</div>
-        </div>
-      </div>
-      <div class="flex gap-2 pl-[10ch]">
-        <button class="chip" onclick="openFeedbackDialog({analysis_id:${ev.analysis_id}, event_id:${ev.id}, category:'${ev.category}', body:${JSON.stringify(ev.body || '')}})">
-          Add feedback
-        </button>
-        <button class="chip" onclick="toggleFeedbackList(${ev.id})">
-          View feedback (${ev.feedback_count || 0})
-        </button>
-      </div>
-      <div id="fb-list-${ev.id}" class="hidden mt-1 pl-[10ch]"></div>
-    </div>
-  `).join("");
+  box.innerHTML = ""; // clear
+
+  rows.forEach((ev) => {
+    const wrap = document.createElement("div");
+    wrap.className = "py-2 flex flex-col gap-2 border-b border-white/5";
+
+    // top line
+    const top = document.createElement("div");
+    top.className = "flex items-start gap-3";
+
+    const ts = document.createElement("div");
+    ts.className = "min-w-[10ch] text-gray-400";
+    ts.textContent = new Date(ev.ts).toLocaleString();
+
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.textContent = ev.category;
+
+    const main = document.createElement("div");
+    main.className = "flex-1";
+    const title = document.createElement("div");
+    title.className = "font-medium";
+    title.textContent = ev.title || "Event";
+    const body = document.createElement("div");
+    body.className = "text-gray-400";
+    body.textContent = ev.body || "";
+    main.appendChild(title);
+    main.appendChild(body);
+
+    top.appendChild(ts);
+    top.appendChild(chip);
+    top.appendChild(main);
+
+    // buttons
+    const btnRow = document.createElement("div");
+    btnRow.className = "flex gap-2 pl-[10ch]";
+
+    const addBtn = document.createElement("button");
+    addBtn.className = "chip";
+    addBtn.textContent = "Add feedback";
+    addBtn.addEventListener("click", () => {
+      openFeedbackDialog({
+        analysis_id: ev.analysis_id,
+        event_id: ev.id,
+        category: ev.category,
+        body: ev.body || ""
+      });
+    });
+
+    const viewBtn = document.createElement("button");
+    viewBtn.className = "chip";
+    viewBtn.textContent = `View feedback (${ev.feedback_count || 0})`;
+    viewBtn.addEventListener("click", () => toggleFeedbackList(ev.id));
+
+    btnRow.appendChild(addBtn);
+    btnRow.appendChild(viewBtn);
+
+    // feedback list container
+    const fbList = document.createElement("div");
+    fbList.id = `fb-list-${ev.id}`;
+    fbList.className = "hidden mt-1 pl-[10ch]";
+
+    wrap.appendChild(top);
+    wrap.appendChild(btnRow);
+    wrap.appendChild(fbList);
+    box.appendChild(wrap);
+  });
 }
+
 
 
 // ---------- Click handler using the controller ----------
@@ -1201,7 +1248,6 @@ async function openModal(row) {
   // --- Title + meta ---
   title.innerHTML = `${modeIcon(row.mode)} <span class="capitalize">${row.mode ?? "passive"}</span> summary`;
   meta.textContent = [row.ts, row.focus ? `Focus: ${row.focus}` : ""].filter(Boolean).join(" • ");
-
   const raw = row.summary ?? "(No summary)";
 
   // --- normalize bare labels into Markdown headings ---
@@ -1237,10 +1283,10 @@ async function openModal(row) {
   }
   flush();
 
-  // --- Build UI (clear first) ---
+  // --- Build UI ---
   container.innerHTML = "";
 
-  // Hero summary (first section if "Summary")
+  // Hero summary
   const first = sections[0];
   if (first && isSummaryTitle(first.title || "")) {
     const hero = document.createElement("div");
@@ -1258,31 +1304,37 @@ async function openModal(row) {
     sections.shift();
   }
 
-  // --- Prefetch lookups ONCE for this analysis (no awaits inside per-card code) ---
+  // --- Prefetch once for this analysis ---
   const norm = (s="") => String(s).replace(/\s+/g," ").trim();
   const esc  = window.escapeHtml || ((s="") => s.replace(/[&<>"]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])));
 
-  // Map of exact bullet/paragraph text -> event row (for this analysis)
+  // Events: body -> event, and event_id -> body (fallback for feedback grouping)
   let evByBody = {};
+  const bodyByEventId = {};
   try {
     const evRows = await jsonFetch(api(`events?since=${encodeURIComponent(row.ts)}&limit=1000`)) || [];
     evRows
       .filter(e => e.analysis_id === row.id)
-      .forEach(e => { evByBody[norm(e.body || "")] = e; });
-  } catch { /* non-fatal */ }
+      .forEach(e => {
+        const k = norm(e.body || "");
+        evByBody[k] = e;
+        if (e.id != null) bodyByEventId[e.id] = k;
+      });
+  } catch {}
 
-  // Map of body text -> array of feedback rows
+  // Feedback: group by body; if body missing, derive from event_id using the map above
   const fbByBody = new Map();
   try {
     const fbs = await jsonFetch(api(`feedback?analysis_id=${row.id}&limit=1000`)) || [];
     fbs.forEach(f => {
-      const k = norm(f.body || "");
-      if (!fbByBody.has(k)) fbByBody.set(k, []);
-      fbByBody.get(k).push(f);
+      const key = norm(f.body || bodyByEventId[f.event_id] || "");
+      if (!key) return;
+      if (!fbByBody.has(key)) fbByBody.set(key, []);
+      fbByBody.get(key).push(f);
     });
-  } catch { /* non-fatal */ }
+  } catch {}
 
-  // --- Followups (place AFTER clearing, so they remain visible) ---
+  // Followups
   try {
     const followups = await jsonFetch(api(`followups?analysis_id=${row.id}`)) || [];
     if (followups.length) {
@@ -1311,14 +1363,14 @@ async function openModal(row) {
       });
       container.appendChild(actionsWrap);
     }
-  } catch { /* ignore followups load errors */ }
+  } catch {}
 
   // Masonry wrap
   const wrap = document.createElement("div");
   wrap.className = "modal-masonry";
   container.appendChild(wrap);
 
-  // Helper: render feedback list items
+  // Helper to render a feedback list
   function renderFbList(listEl, items) {
     if (!items || !items.length) {
       listEl.innerHTML = "<div class='text-gray-400 text-sm'>No feedback yet.</div>";
@@ -1334,7 +1386,6 @@ async function openModal(row) {
     `).join("");
   }
 
-  // Section cards
   const eligible = new Set(["Comfort","Security","Energy","Anomalies","Presence"]);
 
   for (const [idx, sec] of sections.entries()) {
@@ -1387,13 +1438,13 @@ async function openModal(row) {
       } catch (e) { console.warn("Chart render failed:", e); }
     }
 
-    // Inline feedback controls (built from prefetches; no awaits here)
+    // Inline feedback controls
     if (eligible.has(t)) {
       const addControlsFor = (el) => {
         const key = norm(el.textContent || "");
         if (!key) return;
 
-        const ev  = evByBody[key];          // may be undefined (backend can resolve via analysis_id + body)
+        const ev  = evByBody[key];          // may be undefined
         const arr = fbByBody.get(key) || [];
         const count = arr.length;
 
@@ -1408,7 +1459,7 @@ async function openModal(row) {
           <div class="feedback-list hidden mt-2"></div>
         `;
 
-        // Save handler — async, but no await elsewhere in the loop
+        // Save handler
         box.querySelector(".feedback-save").addEventListener("click", async () => {
           const txtEl = box.querySelector(".feedback-text");
           const note = (txtEl.value || "").trim();
@@ -1428,7 +1479,7 @@ async function openModal(row) {
               })
             });
 
-            // optimistic local update
+            // optimistic update
             const now = new Date().toISOString();
             const updated = [{ ts: now, note, kind: "context", body: key }, ...(fbByBody.get(key) || [])];
             fbByBody.set(key, updated);
@@ -1446,7 +1497,7 @@ async function openModal(row) {
           }
         });
 
-        // View toggle (uses preloaded/optimistic data)
+        // View toggle
         const listEl = box.querySelector(".feedback-list");
         box.querySelector(".feedback-toggle").addEventListener("click", () => {
           listEl.classList.toggle("hidden");
@@ -1470,6 +1521,7 @@ async function openModal(row) {
   $("overlayBackdrop").addEventListener("click", closeModal, { once: true });
   $("modalClose").addEventListener("click", closeModal, { once: true });
 }
+
 
 
 
