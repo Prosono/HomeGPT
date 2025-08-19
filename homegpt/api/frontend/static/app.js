@@ -396,7 +396,12 @@ function linkifyEntities(text, { entity_ids = [], device_ids = [], addChips = tr
 
 // --- Resolve device_id from an entity_id via HA WebSocket ---
 function getHass() {
-  return window.hass || document.querySelector("home-assistant")?.hass || null;
+  try {
+    if (window.hass) return window.hass;
+    const host = document.querySelector("home-assistant") 
+              || window.parent?.document?.querySelector("home-assistant");
+    return host?.hass || null;
+  } catch { return null; }
 }
 
 async function ensureEntityRegistry() {
@@ -417,7 +422,6 @@ async function ensureEntityRegistry() {
 async function resolveDeviceChips(root = document) {
   const reg = await ensureEntityRegistry();
   if (!reg) return;
-
   root.querySelectorAll(".device-chip-loader[data-entity-id]").forEach(node => {
     const eid = node.getAttribute("data-entity-id");
     const entry = reg.find(e => e.entity_id === eid);
@@ -433,7 +437,6 @@ async function resolveDeviceChips(root = document) {
     node.replaceWith(a);
   });
 }
-
 
 // Run linkify inside already-rendered HTML (only text nodes between tags)
 function linkifyHtml(html="") {
@@ -1433,7 +1436,7 @@ async function loadEvents() {
       row.querySelector(".js-view")?.addEventListener("click", () => {
         toggleFeedbackList(ev.id);
       });
-      
+
       resolveDeviceChips();
       listEl.appendChild(row);
     });
@@ -1924,7 +1927,7 @@ function paintEventsList(list) {
     row.querySelector(".js-view")?.addEventListener("click", () => {
       toggleFeedbackList(ev.id);
     });
-
+    queueMicrotask(() => resolveDeviceChips(listEl));
     box.appendChild(row);
   });
 }
@@ -2162,6 +2165,18 @@ function init() {
   $("toggleMode").addEventListener("click", toggleMode);
   $("runAnalysis").addEventListener("click", runAnalysisNow);
   initFeedbackManager();
+
+  // 🔧 Fallback click for unresolved device chips
+  if (!window._deviceChipHandlerBound) {
+    document.addEventListener("click", (e) => {
+      const chip = e.target.closest(".device-chip-loader");
+      if (!chip) return;
+      const eid = chip.getAttribute("data-entity-id");
+      const url = HA.url(`/config/devices/dashboard?search=${encodeURIComponent(eid)}`);
+      window.open(url, "_blank", "noopener");
+    }, { passive: true });
+    window._deviceChipHandlerBound = true;
+  }
 
   // initial loads
   loadStatus().catch(console.error);

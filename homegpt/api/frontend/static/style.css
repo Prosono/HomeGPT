@@ -977,3 +977,5 @@ header, main, footer, .card, #detailsOverlay { position: relative; z-index: 1; }
 a.entity-link { text-decoration: underline; color: #93c5fd; }
 a.entity-link:hover { text-decoration: none; filter: brightness(1.1); }
 a.entity-chip { text-decoration: none; }
+
+.device-chip-loader { cursor: pointer; }
