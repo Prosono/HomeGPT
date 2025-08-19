@@ -12,6 +12,11 @@ const modeIcon = (mode) => {
   return '<i class="mdi mdi-note-text-outline analysis-icon" aria-hidden="true"></i>';
 };
 
+
+const CAT_WORDS = ["security","comfort","energy","anomalies","presence","actions"];
+
+const _clean = s => (s||"").trim();
+const _isCatWord = s => CAT_WORDS.includes(_clean(s).toLowerCase());
 // ---------- Progress controller (robust + smooth) ----------
 const prog = {
   raf: null,
@@ -330,6 +335,48 @@ async function toggleFeedbackList(eid) {
 })(); // ✅ close the IIFE
   
 
+
+function isNoiseEvent(ev){
+  const t = _clean(ev.title), b = _clean(ev.body);
+  const dup = t && b && t.toLowerCase() === b.toLowerCase();
+  const bothShort = (t+b).length < 6;
+  // junk if title is just the category and body is blank OR also just the category
+  if (_isCatWord(t) && (!b || _isCatWord(b))) return true;
+  // junk if nothing meaningful
+  if ((!t && !b) || bothShort) return true;
+  // “Comfort/Comfort” style
+  if (dup && _isCatWord(t)) return true;
+  return false;
+}
+
+function makeNiceTitle(ev){
+  const t = _clean(ev.title), b = _clean(ev.body);
+  if (!t || _isCatWord(t) || t.toLowerCase() === b.toLowerCase()) {
+    // first clause/sentence from body
+    const m = b.match(/^(.{0,110}?)(?:[.!?]|—| - |:|$)/);
+    return (m ? m[1] : b || "Event").replace(/\s+/g," ").replace(/\.$/,"");
+  }
+  return t;
+}
+
+function formatBody(ev){
+  let b = _clean(ev.body);
+  if (!b || b.toLowerCase() === _clean(ev.title).toLowerCase() || _isCatWord(b)) {
+    // fall back to something a touch richer
+    b = _clean(ev.body) || "(no extra details)";
+  }
+  // highlight a few key numbers/units
+  b = escapeHtml(b).replace(
+    /(-?\d+(?:\.\d+)?)\s?(kWh|kW|W|°C|%|NOK\/kWh)/g,
+    "<b class='num'>$1&nbsp;$2</b>"
+  );
+  // turn entity ids into chips (best-effort)
+  const ents = (_clean(ev.entities) ? ev.entities.split(",") :
+               (ev.body||"").match(/\b(?:sensor|binary_sensor|switch|climate|lock|light|media_player)\.[\w_:-]+\b/g) || [])
+               .slice(0,6);
+  const chips = ents.length ? `<div class="mt-1">${ents.map(e=>`<span class="chip">${escapeHtml(e)}</span>`).join(" ")}</div>` : "";
+  return b + chips;
+}
 
 // Split markdown into sections grouped by headings (h1–h4)
 function splitSections(markdown = "") {
@@ -1221,6 +1268,13 @@ async function loadEvents() {
   const listEl = $("eventsList");
   if (!listEl) return;
 
+  rows = rows
+  .filter(ev => !isNoiseEvent(ev))
+  .map(ev => ({ ...ev,
+    _title: makeNiceTitle(ev),
+    _bodyHtml: formatBody(ev)
+  }));
+
   // Keep a cache for paging
   EV_CACHE = rows;
 
@@ -1254,16 +1308,11 @@ async function loadEvents() {
         </div>
 
         <div class="event-main">
-          <div class="title">${escapeHtml(ev.title || "Event")}</div>
-          <div class="body">${escapeHtml(ev.body || "")}</div>
+          <div class="title">${escapeHtml(ev._title || ev.title || "Event")}</div>
+          <div class="body">${ev._bodyHtml || escapeHtml(ev.body || "")}</div>
         </div>
 
-        <div class="event-actions">
-          <button class="chip js-add">Add feedback</button>
-          <button class="chip js-view">View feedback (${ev.feedback_count || 0})</button>
-        </div>
-
-        <!-- feedback list (toggles open/closed) -->
+        <div class="event-actions"> … </div>
         <div id="fb-list-${ev.id}" class="hidden mt-1 col-span-3"></div>
       `;
 
