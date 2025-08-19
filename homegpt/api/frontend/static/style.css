@@ -973,3 +973,14 @@ header, main, footer, .card, #detailsOverlay { position: relative; z-index: 1; }
 }
 #eventsPager .pager-btn[disabled]{opacity:.45; cursor:not-allowed}
 #eventsPager .pager-meta{color:#94a3b8; font-size:12.5px}
+
+/* Clickable entity references */
+.entity-link{
+  text-decoration: underline dotted;
+  color:#93c5fd;
+}
+.entity-link:hover{ text-decoration: underline; color:#bfdbfe }
+
+/* Optional chips row rendered under the body when entity_ids/device_ids are present */
+.entity-chip-row{ margin-top:.35rem; display:flex; flex-wrap:wrap; gap:.35rem }
+.entity-chip{ background: var(--chip); border-color: var(--border); font-weight:700 }
