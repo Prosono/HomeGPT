@@ -362,38 +362,76 @@ function defaultEntityHref(eid) {
     : HA.entityManage(eid);   // others → Entity editor
 }
 // ---- Linkifier
-function linkifyEntities(
-  text,
-  { entity_ids = [], device_ids = [], addChips = true, alreadyEscaped = false } = {}
-) {
+function linkifyEntities(text, { entity_ids = [], device_ids = [], addChips = true, alreadyEscaped = false } = {}) {
   if (!text) return "";
-
   const toArr = (v) => Array.isArray(v) ? v
-    : typeof v === "string" ? v.split(/[,\s]+/).map(s=>s.trim()).filter(Boolean)
-    : [];
+    : (typeof v === "string" ? v.split(/[,\s]+/).map(s => s.trim()).filter(Boolean) : []);
   const eids = [...new Set(toArr(entity_ids))];
   const dids = [...new Set(toArr(device_ids))];
 
   let html = alreadyEscaped ? String(text) : escapeHtml(String(text));
 
-  // link inline entity-id looking tokens
   html = html.replace(/\b([a-z_]+)\.([\w:-]+)\b/g, (m) =>
     `<a class="entity-link" data-entity-id="${m}" href="${defaultEntityHref(m)}" target="_blank" rel="noopener">${m}</a>`
   );
 
   if (addChips) {
     const chips = [];
+
     if (eids.length) {
-      const eid = eids[0];
-      chips.push(`<a class="chip entity-chip" href="${HA.entityManage(eid)}" target="_blank" rel="noopener">✏️ Edit</a>`);
+      chips.push(`<a class="chip entity-chip" href="${HA.entityManage(eids[0])}" target="_blank" rel="noopener">✏️ Edit</a>`);
     }
+
     if (dids.length) {
-      const did = dids[0];
-      chips.push(`<a class="chip entity-chip" href="${HA.deviceManage(did)}" target="_blank" rel="noopener">🔧 Device</a>`);
+      chips.push(`<a class="chip entity-chip" href="${HA.deviceManage(dids[0])}" target="_blank" rel="noopener">🔧 Device</a>`);
+    } else if (eids.length) {
+      // No device_id known → add a placeholder that resolveDeviceChips() will replace
+      chips.push(`<span class="chip entity-chip device-chip-loader" data-entity-id="${eids[0]}">🔧 Device</span>`);
     }
+
     if (chips.length) html += `<div class="entity-chip-row mt-1">${chips.join(" ")}</div>`;
   }
   return html;
+}
+
+// --- Resolve device_id from an entity_id via HA WebSocket ---
+function getHass() {
+  return window.hass || document.querySelector("home-assistant")?.hass || null;
+}
+
+async function ensureEntityRegistry() {
+  if (window._entityRegistryList) return window._entityRegistryList;
+  const hass = getHass();
+  if (!hass?.connection) return null;
+  try {
+    window._entityRegistryList = await hass.connection.sendMessagePromise({
+      type: "config/entity_registry/list"
+    });
+    return window._entityRegistryList;
+  } catch (e) {
+    console.warn("entity_registry/list failed", e);
+    return null;
+  }
+}
+
+async function resolveDeviceChips(root = document) {
+  const reg = await ensureEntityRegistry();
+  if (!reg) return;
+
+  root.querySelectorAll(".device-chip-loader[data-entity-id]").forEach(node => {
+    const eid = node.getAttribute("data-entity-id");
+    const entry = reg.find(e => e.entity_id === eid);
+    const did = entry?.device_id;
+    if (!did) { node.remove(); return; }
+
+    const a = document.createElement("a");
+    a.className = "chip entity-chip";
+    a.href = HA.deviceManage(did);
+    a.target = "_blank";
+    a.rel = "noopener";
+    a.textContent = "🔧 Device";
+    node.replaceWith(a);
+  });
 }
 
 
@@ -1395,7 +1433,8 @@ async function loadEvents() {
       row.querySelector(".js-view")?.addEventListener("click", () => {
         toggleFeedbackList(ev.id);
       });
-
+      
+      resolveDeviceChips();
       listEl.appendChild(row);
     });
   };
