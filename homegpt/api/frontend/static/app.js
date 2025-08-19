@@ -400,11 +400,13 @@ function ensureOverlayVisible() {
   const ov = $("detailsOverlay");
   if (!ov) return false;
   if (ov.parentNode !== document.body) document.body.appendChild(ov);
+
   ov.classList.remove("hidden");
-  ov.style.removeProperty("display");   // let CSS decide
+  ov.style.removeProperty("display");
   ov.style.position = "fixed";
   ov.style.inset = "0";
   ov.style.zIndex = "99999";
+  ov.style.overflow = "hidden";          // ⬅️ overlay itself never scrolls
   return true;
 }
 
@@ -758,6 +760,28 @@ function renderCategoryTrendChart(labels, counts, details) {
     }
   });
 }
+
+function layoutModalScroll() {
+  const body = $("modalSummary");
+  if (!body) return;
+
+  // This element will scroll
+  body.style.overflowY = "auto";
+  body.style.overscrollBehavior = "contain";
+  body.style.minHeight = "0";            // IMPORTANT when a parent is flex
+  // Fit from its current top to the bottom of the viewport with a small margin
+  const top = body.getBoundingClientRect().top;
+  const max = Math.max(120, window.innerHeight - top - 24);
+  body.style.maxHeight = max + "px";
+
+  // Prevent inner wrappers creating their own scrollbars
+  const masonry = body.querySelector(".modal-masonry");
+  if (masonry) masonry.style.overflow = "visible";
+  body.querySelectorAll(".modal-section,.section-body").forEach(el => {
+    el.style.overflow = "visible";
+  });
+}
+window.addEventListener("resize", layoutModalScroll);
 
 
 function buildCategoryChartData(historyRows) {
@@ -1656,6 +1680,7 @@ async function openModal(row) {
     }
 
     wrap.appendChild(card);
+    layoutModalScroll();
   }
 }
 
