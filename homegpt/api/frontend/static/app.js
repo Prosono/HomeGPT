@@ -348,6 +348,7 @@ const HA = {
 
   // stable deep links
   entityHistory: (eid) => HA.url(`/history?entity_id=${encodeURIComponent(eid)}`),
+  entityManage:  (eid) => HA.url(`/config/entities/entity/${encodeURIComponent(eid)}`),
   entityStates:  (eid) => HA.url(`/developer-tools/state?entity_id=${encodeURIComponent(eid)}`),
   deviceManage:  (did) => HA.url(`/config/devices/device/${encodeURIComponent(did)}`)
 };
@@ -357,8 +358,8 @@ function defaultEntityHref(eid) {
   const domain = String(eid).split(".")[0];
   return ["sensor","binary_sensor","climate","input_number","number","utility_meter"]
     .includes(domain)
-    ? HA.entityHistory(eid)
-    : HA.entityStates(eid);
+    ? HA.entityHistory(eid)   // sensors → History
+    : HA.entityManage(eid);   // others → Entity editor
 }
 // ---- Linkifier
 function linkifyEntities(
@@ -384,17 +385,14 @@ function linkifyEntities(
     const chips = [];
     if (eids.length) {
       const eid = eids[0];
-      chips.push(`<a class="chip entity-chip" href="${HA.entityStates(eid)}" target="_blank" rel="noopener">⚙️ Manage</a>`);
+      chips.push(`<a class="chip entity-chip" href="${HA.entityManage(eid)}" target="_blank" rel="noopener">✏️ Edit</a>`);
     }
     if (dids.length) {
       const did = dids[0];
       chips.push(`<a class="chip entity-chip" href="${HA.deviceManage(did)}" target="_blank" rel="noopener">🔧 Device</a>`);
     }
-    if (chips.length) {
-      html += `<div class="entity-chip-row mt-1">${chips.join(" ")}</div>`;
-    }
+    if (chips.length) html += `<div class="entity-chip-row mt-1">${chips.join(" ")}</div>`;
   }
-
   return html;
 }
 
