@@ -282,7 +282,7 @@ body {
 /* ==========================================================================
    Modal summary content safety
    ========================================================================== */
-#modalSummary { overflow-y: auto; padding-right: 4px; max-height: calc(90vh - 150px) }
+#modalSummary { padding-right: 4px; max-height: calc(90vh - 150px) }
 #modalSummary.prose { overflow-wrap: anywhere; word-break: break-word }
 #modalSummary pre, #modalSummary code { white-space: pre-wrap; word-break: break-word }
 #modalSummary img, #modalSummary canvas { max-width: 100%; height: auto; display: block }
