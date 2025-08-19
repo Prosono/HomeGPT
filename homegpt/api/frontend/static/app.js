@@ -396,6 +396,24 @@ function renderAnalysisTimeline(historyRows) {
   });
 }
 
+function ensureOverlayVisible() {
+  const ov = $("detailsOverlay");
+  if (!ov) return false;
+
+  // make absolutely sure it’s the top-most thing in the DOM
+  if (ov.parentNode !== document.body) {
+    document.body.appendChild(ov);
+  }
+
+  // blast through any “hidden”/stacking weirdness
+  ov.classList.remove("hidden");
+  ov.style.display  = "block";
+  ov.style.position = "fixed";
+  ov.style.inset    = "0";
+  ov.style.zIndex   = "99999";     // higher than any card/aura/etc
+
+  return true;
+}
 
 // Extract the first “kWh” and “W” value from a summary string
 function extractMetrics(summary = "") {
@@ -1344,15 +1362,27 @@ async function openModal(row) {
     return;
   }
 
-  // Show overlay early so user sees something even if parsing fails later
-  overlay.classList.remove("hidden");
+
+  // 🔴 show the overlay *immediately* and put a visible placeholder
+  ensureOverlayVisible();
   document.addEventListener("keydown", escClose);
   $("overlayBackdrop")?.addEventListener("click", closeModal, { once: true });
   $("modalClose")?.addEventListener("click", closeModal, { once: true });
 
-  // --- Title + meta ---
   title.innerHTML = `${modeIcon(row.mode)} <span class="capitalize">${row.mode ?? "passive"}</span> summary`;
   meta.textContent = [row.ts, row.focus ? `Focus: ${row.focus}` : ""].filter(Boolean).join(" • ");
+
+  // give the user instant feedback while we parse/await
+  container.innerHTML = `
+    <div class="modal-hero">
+      <div class="hero-head">
+        <i class="mdi mdi-home-analytics-outline"></i><span>Loading…</span>
+      </div>
+      <div class="hero-body">
+        Preparing view for this analysis. One moment…
+      </div>
+    </div>
+  `;
 
   const raw = row.summary ?? "(No summary)";
 
