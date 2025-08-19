@@ -335,6 +335,7 @@ async function toggleFeedbackList(eid) {
 })(); // ✅ close the IIFE
   
 // ---- HA deep-link builders (ingress safe) ----
+// ---- HA deep-link builders (ingress safe)
 function haBasePath() {
   const p = location.pathname, k = "/api/hassio_ingress/";
   const i = p.indexOf(k);
@@ -344,21 +345,36 @@ function joinUrl(a, b){ return a.replace(/\/+$/,"") + "/" + String(b||"").replac
 
 const HA = {
   url: (p="") => joinUrl(location.origin + haBasePath(), p),
+
+  // Primary links that are stable:
   entityHistory:  (eid) => HA.url(`/history?entity_id=${encodeURIComponent(eid)}`),
-  entitySettings: (eid) => HA.url(`/config/entities/entity/${encodeURIComponent(eid)}`),
-  entityApi:      (eid) => HA.url(`/api/states/${encodeURIComponent(eid)}`)
+  entityApi:      (eid) => HA.url(`/api/states/${encodeURIComponent(eid)}`),
+
+  // Entity “manage” link with safe fallback:
+  entityManage: (eid) => {
+    // Try the detail route, but also add a search param so older builds at least filter the list.
+    const q = encodeURIComponent(eid);
+    return HA.url(`/config/entities/entity/${q}?search=${q}&q=${q}`);
+  },
+
+  // Device page + fallback to search in the Devices UI
+  deviceManage: (did) => {
+    const q = encodeURIComponent(did);
+    // detail route (newer UIs) + fallback filter params (older UIs)
+    return HA.url(`/config/devices/device/${q}?search=${q}&q=${q}`);
+  }
 };
 
-// sensible default: sensors → History, everything else → Settings
+// sensible default for clicking the in-text entity mention:
 function defaultEntityHref(eid) {
   const domain = String(eid).split(".")[0];
   return ["sensor","binary_sensor","climate","input_number","number","utility_meter"]
     .includes(domain)
     ? HA.entityHistory(eid)
-    : HA.entitySettings(eid);
+    : HA.entityManage(eid); // non-sensors → go manage view
 }
 
-// Convert plain text that may contain entity IDs into clickable links (+ optional chips)
+// ---- Linkifier
 function linkifyEntities(
   text,
   { entity_ids = [], device_ids = [], alreadyEscaped = false } = {}
@@ -376,24 +392,21 @@ function linkifyEntities(
 
   let html = alreadyEscaped ? String(text) : escapeHtml(String(text));
 
-  // link entity tokens → pick a good per-entity landing page
+  // link entity-like tokens in the text
   html = html.replace(/\b([a-z_]+)\.([\w:-]+)\b/g, (m) => {
-    const main = defaultEntityHref(m);
-    const api  = HA.entityApi(m);
-    return `<span class="entity-pack">
-      <a class="entity-link" href="${main}" target="_blank" rel="noopener">${m}</a>
-      <a class="entity-json" href="${api}"  target="_blank" rel="noopener" title="Open raw state JSON">{}</a>
-    </span>`;
+    const href = defaultEntityHref(m);
+    return `<a class="entity-link" data-entity-id="${m}" href="${href}" target="_blank" rel="noopener">${m}</a>`;
   });
 
-  // optional chips
+  // chips: Manage, JSON, Device (if known)
   const chips = [];
-  eids.forEach(eid => chips.push(
-    `<a class="chip entity-chip" href="${HA.entitySettings(eid)}" target="_blank" rel="noopener">⚙️ ${escapeHtml(eid)}</a>`
-  ));
-  dids.forEach(did => chips.push(
-    `<a class="chip entity-chip" href="${HA.url(`/config/devices/device/${encodeURIComponent(did)}`)}" target="_blank" rel="noopener">🔧 ${escapeHtml(did)}</a>`
-  ));
+  eids.forEach(eid => {
+    chips.push(`<a class="chip entity-chip" href="${HA.entityManage(eid)}" target="_blank" rel="noopener">⚙️ Manage</a>`);
+    chips.push(`<a class="chip entity-chip" href="${HA.entityApi(eid)}"     target="_blank" rel="noopener">{} JSON</a>`);
+  });
+  dids.forEach(did => {
+    chips.push(`<a class="chip entity-chip" href="${HA.deviceManage(did)}"  target="_blank" rel="noopener">🔧 Device</a>`);
+  });
 
   return chips.length ? `${html}<div class="entity-chip-row mt-1">${chips.join(" ")}</div>` : html;
 }
