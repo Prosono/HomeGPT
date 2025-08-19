@@ -399,16 +399,12 @@ function renderAnalysisTimeline(historyRows) {
 function ensureOverlayVisible() {
   const ov = $("detailsOverlay");
   if (!ov) return false;
-
-  if (ov.parentNode !== document.body) {
-    document.body.appendChild(ov);
-  }
-
+  if (ov.parentNode !== document.body) document.body.appendChild(ov);
   ov.classList.remove("hidden");
-  ov.style.removeProperty("display");   // ← let CSS control display
+  ov.style.removeProperty("display");   // let CSS decide
   ov.style.position = "fixed";
-  ov.style.inset    = "0";
-  ov.style.zIndex   = "99999";
+  ov.style.inset = "0";
+  ov.style.zIndex = "99999";
   return true;
 }
 
@@ -1363,9 +1359,19 @@ async function openModal(row) {
 
   // 🔴 show the overlay *immediately* and put a visible placeholder
   ensureOverlayVisible();
-  document.addEventListener("keydown", escClose);
-  $("overlayBackdrop")?.addEventListener("click", closeModal, { once: true });
-  $("modalClose")?.addEventListener("click", closeModal, { once: true });
+
+  // one-time Esc handler stored on the overlay instance
+  if (!overlay._escHandler) {
+    overlay._escHandler = (e) => {
+      if (e.key === "Escape") closeModal();
+    };
+  }
+  document.addEventListener("keydown", overlay._escHandler);
+
+  // (re)bind close buttons each time we open
+  const bindClose = () => closeModal();
+  $("overlayBackdrop")?.addEventListener("click", bindClose, { once: true });
+  $("modalClose")?.addEventListener("click", bindClose, { once: true });
 
   title.innerHTML = `${modeIcon(row.mode)} <span class="capitalize">${row.mode ?? "passive"}</span> summary`;
   meta.textContent = [row.ts, row.focus ? `Focus: ${row.focus}` : ""].filter(Boolean).join(" • ");
@@ -1965,8 +1971,11 @@ function closeModal() {
   const ov = $("detailsOverlay");
   if (!ov) return;
   ov.classList.add("hidden");
-  ov.style.display = "none";           // ← override any leftover inline display
-  document.removeEventListener("keydown", escClose);
+  ov.style.display = "none"; // belt-and-suspenders against inline display
+  if (ov._escHandler) {
+    document.removeEventListener("keydown", ov._escHandler);
+    ov._escHandler = null;
+  }
 }
 
 // ---------- Init ----------
