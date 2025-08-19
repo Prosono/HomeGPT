@@ -138,13 +138,14 @@ body {
 /* ==========================================================================
    Modal
    ========================================================================== */
-#detailsOverlay { overflow: auto; animation: fadeIn 150ms ease-out both }
+#detailsOverlay { overflow: hidden; }            /* was: auto */
 @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
 
 .modal-panel {
-  width: min(92vw, 1100px);
   height: min(92vh, 1100px);
-  overflow: auto;
+  display: flex;                 /* header + body layout */
+  flex-direction: column;
+  overflow: hidden;              /* was: auto */
 }
 
 /* Dialog backdrop (native <dialog> for history) */
@@ -282,7 +283,14 @@ body {
 /* ==========================================================================
    Modal summary content safety
    ========================================================================== */
-#modalSummary { padding-right: 4px; max-height: calc(90vh - 150px) }
+/* Make ONLY the body scroll */
+#modalSummary {
+  flex: 1 1 auto;
+  min-height: 0;                 /* important in flex containers */
+  overflow: auto;                /* the single scrollbar */
+  max-height: none;              /* override older rule */
+}
+
 #modalSummary.prose { overflow-wrap: anywhere; word-break: break-word }
 #modalSummary pre, #modalSummary code { white-space: pre-wrap; word-break: break-word }
 #modalSummary img, #modalSummary canvas { max-width: 100%; height: auto; display: block }

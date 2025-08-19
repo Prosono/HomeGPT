@@ -400,13 +400,11 @@ function ensureOverlayVisible() {
   const ov = $("detailsOverlay");
   if (!ov) return false;
   if (ov.parentNode !== document.body) document.body.appendChild(ov);
-
   ov.classList.remove("hidden");
-  ov.style.removeProperty("display");
   ov.style.position = "fixed";
   ov.style.inset = "0";
   ov.style.zIndex = "99999";
-  ov.style.overflow = "hidden";          // ⬅️ overlay itself never scrolls
+  ov.style.overflow = "hidden";     // ← belt & suspenders
   return true;
 }
 
