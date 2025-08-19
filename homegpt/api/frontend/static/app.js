@@ -400,20 +400,18 @@ function ensureOverlayVisible() {
   const ov = $("detailsOverlay");
   if (!ov) return false;
 
-  // make absolutely sure it’s the top-most thing in the DOM
   if (ov.parentNode !== document.body) {
     document.body.appendChild(ov);
   }
 
-  // blast through any “hidden”/stacking weirdness
   ov.classList.remove("hidden");
-  ov.style.display  = "block";
+  ov.style.removeProperty("display");   // ← let CSS control display
   ov.style.position = "fixed";
   ov.style.inset    = "0";
-  ov.style.zIndex   = "99999";     // higher than any card/aura/etc
-
+  ov.style.zIndex   = "99999";
   return true;
 }
+
 
 // Extract the first “kWh” and “W” value from a summary string
 function extractMetrics(summary = "") {
@@ -1962,9 +1960,12 @@ function initFeedbackManager() {
 
 
 
-function escClose(e) { if (e.key === "Escape") closeModal(); }
+// function escClose(e) { if (e.key === "Escape") closeModal(); }
 function closeModal() {
-  $("detailsOverlay").classList.add("hidden");
+  const ov = $("detailsOverlay");
+  if (!ov) return;
+  ov.classList.add("hidden");
+  ov.style.display = "none";           // ← override any leftover inline display
   document.removeEventListener("keydown", escClose);
 }
 
