@@ -1050,7 +1050,23 @@ async function renderGrid(rows) {
 
     const card = document.createElement("button");
     card.className = "preview-card w-full text-left hover:bg-white/5 transition-colors";
-    card.addEventListener("click", () => openModal(r));
+    card.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      try {
+        window._lastOpenModalRow = r; // debug breadcrumb
+        const maybePromise = openModal(r);
+        if (maybePromise && typeof maybePromise.then === "function") {
+          maybePromise.catch(err => {
+            console.error("openModal (async) failed:", err);
+            alert("Couldn't open the analysis view. See console for details.");
+          });
+        }
+      } catch (err) {
+        console.error("openModal failed:", err);
+        alert("Couldn't open the analysis view. See console for details.");
+      }
+    });
 
     // header
     const modePretty = (r.mode||"passive").charAt(0).toUpperCase() + (r.mode||"passive").slice(1);
@@ -1317,16 +1333,28 @@ async function runAnalysisNow() {
 }
 
 // ---------- Modal (with Markdown) ----------
-// ---------- Modal (with Markdown) ----------
 async function openModal(row) {
   const overlay   = $("detailsOverlay");
   const title     = $("modalTitle");
   const meta      = $("modalMeta");
   const container = $("modalSummary");
 
+  if (!overlay || !title || !meta || !container) {
+    console.error("Modal DOM missing.", { overlay: !!overlay, title: !!title, meta: !!meta, container: !!container });
+    alert(snippet(row?.summary || "(no summary available)", 800));
+    return;
+  }
+
+  // Show overlay early so user sees something even if parsing fails later
+  overlay.classList.remove("hidden");
+  document.addEventListener("keydown", escClose);
+  $("overlayBackdrop")?.addEventListener("click", closeModal, { once: true });
+  $("modalClose")?.addEventListener("click", closeModal, { once: true });
+
   // --- Title + meta ---
   title.innerHTML = `${modeIcon(row.mode)} <span class="capitalize">${row.mode ?? "passive"}</span> summary`;
   meta.textContent = [row.ts, row.focus ? `Focus: ${row.focus}` : ""].filter(Boolean).join(" • ");
+
   const raw = row.summary ?? "(No summary)";
 
   // --- normalize bare labels into Markdown headings ---
@@ -1343,11 +1371,21 @@ async function openModal(row) {
     return md.replace(/\n{3,}/g, "\n\n");
   };
 
-  // --- Preprocess + tokenize ---
+  const isSummaryTitle = (txt = "") =>
+    /summary/i.test(txt) && !/Energy|Security|Comfort|Anomal/i.test(txt);
+
+  const norm = (s="") => String(s).replace(/\s+/g," ").trim();
+  const esc  = window.escapeHtml || ((s="") => s.replace(/[&<>"]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])));
+
+  // --- Preprocess + tokenize (never early-return) ---
   const prepped = coerceHeadings(raw);
   let tokens = [];
-  try { tokens = (window.marked && marked.lexer) ? marked.lexer(prepped) : []; }
-  catch { container.textContent = raw; return; }
+  try {
+    tokens = (window.marked && marked.lexer) ? marked.lexer(prepped) : [];
+  } catch (e) {
+    console.warn("marked.lexer failed; falling back to a single paragraph", e);
+    tokens = [{ type: "paragraph", text: raw }];
+  }
 
   // --- Group tokens by headings ---
   const sections = [];
@@ -1361,47 +1399,24 @@ async function openModal(row) {
     else { current.bodyTokens.push(tok); }
   }
   flush();
+  if (!sections.length) sections.push({ title: "Details", bodyTokens: [{ type: "paragraph", text: raw }] });
 
-  // --- Build UI ---
-  container.innerHTML = "";
-
-  // Hero summary
-  const first = sections[0];
-  if (first && isSummaryTitle(first.title || "")) {
-    const hero = document.createElement("div");
-    hero.className = "modal-hero";
-    const heroIcon = '<i class="mdi mdi-home-analytics-outline"></i>';
-    const heroTitle = first.title || "Summary";
-    let heroHtml = "";
-    try { heroHtml = marked.parser(first.bodyTokens); }
-    catch { heroHtml = `<p>${raw}</p>`; }
-    hero.innerHTML = `
-      <div class="hero-head">${heroIcon}<span>${heroTitle}</span></div>
-      <div class="hero-body">${heroHtml}</div>
-    `;
-    container.appendChild(hero);
-    sections.shift();
-  }
-
-  // --- Prefetch once for this analysis ---
-  const norm = (s="") => String(s).replace(/\s+/g," ").trim();
-  const esc  = window.escapeHtml || ((s="") => s.replace(/[&<>"]/g,c=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c])));
-
-  // Events: body -> event, and event_id -> body (fallback for feedback grouping)
+  // --- Prefetch once for this analysis (wrapped; won't throw) ---
   let evByBody = {};
   const bodyByEventId = {};
   try {
-    const evRows = await jsonFetch(api(`events?since=${encodeURIComponent(row.ts)}&limit=1000`)) || [];
-    evRows
-      .filter(e => e.analysis_id === row.id)
-      .forEach(e => {
-        const k = norm(e.body || "");
-        evByBody[k] = e;
-        if (e.id != null) bodyByEventId[e.id] = k;
-      });
-  } catch {}
+    if (row.ts && row.id != null) {
+      const evRows = await jsonFetch(api(`events?since=${encodeURIComponent(row.ts)}&limit=1000`)) || [];
+      evRows
+        .filter(e => e.analysis_id === row.id)
+        .forEach(e => {
+          const k = norm(e.body || "");
+          evByBody[k] = e;
+          if (e.id != null) bodyByEventId[e.id] = k;
+        });
+    }
+  } catch (e) { console.warn("events prefetch failed", e); }
 
-  // Feedback: group by body; if body missing, derive from event_id using the map above
   const fbByBody = new Map();
   try {
     const fbs = await jsonFetch(api(`feedback?analysis_id=${row.id}&limit=1000`)) || [];
@@ -1411,9 +1426,9 @@ async function openModal(row) {
       if (!fbByBody.has(key)) fbByBody.set(key, []);
       fbByBody.get(key).push(f);
     });
-  } catch {}
+  } catch (e) { console.warn("feedback prefetch failed", e); }
 
-  // Followups
+  // --- Followups (safe) ---
   try {
     const followups = await jsonFetch(api(`followups?analysis_id=${row.id}`)) || [];
     if (followups.length) {
@@ -1432,17 +1447,41 @@ async function openModal(row) {
               body: JSON.stringify({ analysis_id: row.id, code: f.code })
             });
             const pre = document.createElement("pre");
+            pre.className = "followup-response";
             pre.textContent = JSON.stringify(data.payload, null, 2);
             container.appendChild(pre);
-          } finally {
-            b.disabled = false;
-          }
+          } finally { b.disabled = false; }
         });
         actionsWrap.appendChild(b);
       });
-      container.appendChild(actionsWrap);
+      // We'll append this after the hero below to keep structure neat
+      container._followups = actionsWrap;
     }
-  } catch {}
+  } catch (e) { console.warn("followups fetch failed", e); }
+
+  // --- Build UI ---
+  container.innerHTML = "";
+
+  // Hero summary
+  const first = sections[0];
+  if (first && isSummaryTitle(first.title || "")) {
+    const hero = document.createElement("div");
+    hero.className = "modal-hero";
+    const heroIcon = '<i class="mdi mdi-home-analytics-outline"></i>';
+    const heroTitle = first.title || "Summary";
+    let heroHtml = "";
+    try { heroHtml = marked.parser(first.bodyTokens); }
+    catch { heroHtml = `<p>${esc(raw)}</p>`; }
+    hero.innerHTML = `
+      <div class="hero-head">${heroIcon}<span>${heroTitle}</span></div>
+      <div class="hero-body">${heroHtml}</div>
+    `;
+    container.appendChild(hero);
+    sections.shift();
+  }
+
+  // If we fetched followups, place them now under the hero
+  if (container._followups) container.appendChild(container._followups);
 
   // Masonry wrap
   const wrap = document.createElement("div");
@@ -1476,7 +1515,7 @@ async function openModal(row) {
 
     // Heading
     const h = document.createElement("h3");
-    h.innerHTML = `${categoryIcon(t)} ${t}`;
+    h.innerHTML = `${categoryIcon(t)} ${esc(t)}`;
     card.appendChild(h);
 
     // Body
@@ -1484,11 +1523,11 @@ async function openModal(row) {
     body.className = "section-body";
     let html = "";
     try { html = marked.parser(sec.bodyTokens); }
-    catch { html = `<p>${raw}</p>`; }
+    catch { html = `<p>${esc(raw)}</p>`; }
     body.innerHTML = html;
     card.appendChild(body);
 
-    // Optional chart if numbers present
+    // Optional tiny chart if a few numbers exist
     const plain = body.textContent || "";
     const nums = (plain.match(/-?\d+(?:\.\d+)?/g) || []).map(parseFloat).filter(n => !isNaN(n));
     if (nums.length >= 3) {
@@ -1517,13 +1556,13 @@ async function openModal(row) {
       } catch (e) { console.warn("Chart render failed:", e); }
     }
 
-    // Inline feedback controls
+    // Inline feedback controls (mapped to event where possible)
     if (eligible.has(t)) {
       const addControlsFor = (el) => {
         const key = norm(el.textContent || "");
         if (!key) return;
 
-        const ev  = evByBody[key];          // may be undefined
+        const ev  = evByBody[key];      // may be undefined
         const arr = fbByBody.get(key) || [];
         const count = arr.length;
 
@@ -1543,7 +1582,6 @@ async function openModal(row) {
           const txtEl = box.querySelector(".feedback-text");
           const note = (txtEl.value || "").trim();
           if (!note) return;
-
           try {
             await jsonFetch(api("feedback"), {
               method: "POST",
@@ -1557,23 +1595,16 @@ async function openModal(row) {
                 kind: "context"
               })
             });
-
             // optimistic update
             const now = new Date().toISOString();
             const updated = [{ ts: now, note, kind: "context", body: key }, ...(fbByBody.get(key) || [])];
             fbByBody.set(key, updated);
             txtEl.value = "";
-
             const toggleBtn = box.querySelector(".feedback-toggle");
             if (toggleBtn) toggleBtn.textContent = `View (${updated.length})`;
-
             const listEl = box.querySelector(".feedback-list");
-            if (listEl && !listEl.classList.contains("hidden")) {
-              renderFbList(listEl, updated);
-            }
-          } catch (e) {
-            console.error("Save feedback failed:", e);
-          }
+            if (listEl && !listEl.classList.contains("hidden")) renderFbList(listEl, updated);
+          } catch (e) { console.error("Save feedback failed:", e); }
         });
 
         // View toggle
@@ -1593,12 +1624,6 @@ async function openModal(row) {
 
     wrap.appendChild(card);
   }
-
-  // Finalize modal open
-  overlay.classList.remove("hidden");
-  document.addEventListener("keydown", escClose);
-  $("overlayBackdrop").addEventListener("click", closeModal, { once: true });
-  $("modalClose").addEventListener("click", closeModal, { once: true });
 }
 
 
