@@ -1054,10 +1054,9 @@ async function renderGrid(rows) {
       ev.preventDefault();
       ev.stopPropagation();
       try {
-        window._lastOpenModalRow = r; // debug breadcrumb
-        const maybePromise = openModal(r);
-        if (maybePromise && typeof maybePromise.then === "function") {
-          maybePromise.catch(err => {
+        const p = openModal(r);
+        if (p && typeof p.then === "function") {
+          p.catch(err => {
             console.error("openModal (async) failed:", err);
             alert("Couldn't open the analysis view. See console for details.");
           });
