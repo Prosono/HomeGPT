@@ -344,11 +344,19 @@ function joinUrl(a, b){ return a.replace(/\/+$/,"") + "/" + String(b||"").replac
 
 const HA = {
   url: (p="") => joinUrl(location.origin + haBasePath(), p),
-  entityStates:   (eid) => HA.url(`/developer-tools/state?entity_id=${encodeURIComponent(eid)}`),
   entityHistory:  (eid) => HA.url(`/history?entity_id=${encodeURIComponent(eid)}`),
   entitySettings: (eid) => HA.url(`/config/entities/entity/${encodeURIComponent(eid)}`),
-  devicePage:     (did) => HA.url(`/config/devices/device/${encodeURIComponent(did)}`)
+  entityApi:      (eid) => HA.url(`/api/states/${encodeURIComponent(eid)}`)
 };
+
+// sensible default: sensors → History, everything else → Settings
+function defaultEntityHref(eid) {
+  const domain = String(eid).split(".")[0];
+  return ["sensor","binary_sensor","climate","input_number","number","utility_meter"]
+    .includes(domain)
+    ? HA.entityHistory(eid)
+    : HA.entitySettings(eid);
+}
 
 // Convert plain text that may contain entity IDs into clickable links (+ optional chips)
 function linkifyEntities(
@@ -357,43 +365,39 @@ function linkifyEntities(
 ) {
   if (!text) return "";
 
-  // Coerce possible CSV/string/undefined → array
   const toArr = (v) => {
     if (!v) return [];
     if (Array.isArray(v)) return v;
-    if (typeof v === "string") {
-      return v.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
-    }
+    if (typeof v === "string") return v.split(/[,\s]+/).map(s=>s.trim()).filter(Boolean);
     return [];
   };
-
   const eids = toArr(entity_ids);
   const dids = toArr(device_ids);
 
-  // If the source is raw text, escape; if it came from HTML (e.g. marked output), don't.
   let html = alreadyEscaped ? String(text) : escapeHtml(String(text));
 
-  // Replace entity-like tokens: domain.object_id
-  html = html.replace(/\b([a-z_]+)\.([a-z0-9_]+)\b/g, (m) => {
-    const href = HA.entityStates(m);
-    return `<a class="entity-link" data-entity-id="${m}" href="${href}" target="_blank" rel="noopener">${m}</a>`;
+  // link entity tokens → pick a good per-entity landing page
+  html = html.replace(/\b([a-z_]+)\.([\w:-]+)\b/g, (m) => {
+    const main = defaultEntityHref(m);
+    const api  = HA.entityApi(m);
+    return `<span class="entity-pack">
+      <a class="entity-link" href="${main}" target="_blank" rel="noopener">${m}</a>
+      <a class="entity-json" href="${api}"  target="_blank" rel="noopener" title="Open raw state JSON">{}</a>
+    </span>`;
   });
 
-  // Optional chips if your API supplies ids
+  // optional chips
   const chips = [];
-  eids.forEach(eid => {
-    chips.push(
-      `<a class="chip entity-chip" href="${HA.entitySettings(eid)}" target="_blank" rel="noopener">${escapeHtml(eid)}</a>`
-    );
-  });
-  dids.forEach(did => {
-    chips.push(
-      `<a class="chip entity-chip" href="${HA.devicePage(did)}" target="_blank" rel="noopener">🔧 ${escapeHtml(did)}</a>`
-    );
-  });
+  eids.forEach(eid => chips.push(
+    `<a class="chip entity-chip" href="${HA.entitySettings(eid)}" target="_blank" rel="noopener">⚙️ ${escapeHtml(eid)}</a>`
+  ));
+  dids.forEach(did => chips.push(
+    `<a class="chip entity-chip" href="${HA.url(`/config/devices/device/${encodeURIComponent(did)}`)}" target="_blank" rel="noopener">🔧 ${escapeHtml(did)}</a>`
+  ));
 
   return chips.length ? `${html}<div class="entity-chip-row mt-1">${chips.join(" ")}</div>` : html;
 }
+
 
 // Run linkify inside already-rendered HTML (only text nodes between tags)
 function linkifyHtml(html="") {
