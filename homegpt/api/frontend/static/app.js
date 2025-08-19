@@ -1161,65 +1161,122 @@ function eventPillClass(cat = "") {
 // SAFE: no inline JS; all listeners attached programmatically.
 async function loadEvents() {
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-  const rows = await jsonFetch(api(`events?since=${encodeURIComponent(since)}&limit=200`)) || [];
-  const box = document.getElementById("eventsList");
-  if (!box) return;
 
-  box.innerHTML = ""; // clear first
+  let rows = [];
+  try {
+    rows = (await jsonFetch(api(`events?since=${encodeURIComponent(since)}&limit=400`))) || [];
+  } catch (e) {
+    console.error("loadEvents: fetch failed", e);
+  }
 
-  rows.forEach(ev => {
-    const row = document.createElement("div");
-    row.className = "event-row";
+  const listEl = $("eventsList");
+  if (!listEl) return;
 
-    const ts = ev.ts ? new Date(ev.ts).toLocaleString() : "";
+  // Keep a cache for paging
+  EV_CACHE = rows;
 
-    row.innerHTML = `
-      <div class="event-meta">
-        <div class="event-time">${escapeHtml(ts)}</div>
-        <span class="${eventPillClass(ev.category)}">${escapeHtml(ev.category || "generic")}</span>
+  // Ensure there's a pager element after the list
+  let pagerEl = $("eventsPager");
+  if (!pagerEl) {
+    pagerEl = document.createElement("div");
+    pagerEl.id = "eventsPager";
+    listEl.insertAdjacentElement("afterend", pagerEl);
+  }
+
+  // Render just the visible slice
+  const paintEventsList = (slice) => {
+    listEl.innerHTML = "";
+
+    if (!slice.length) {
+      listEl.innerHTML = `<div class="text-sm text-gray-400 py-3">No events in the last 24h.</div>`;
+      return;
+    }
+
+    slice.forEach(ev => {
+      const row = document.createElement("div");
+      row.className = "event-row";
+
+      const ts = ev.ts ? new Date(ev.ts).toLocaleString() : "";
+
+      row.innerHTML = `
+        <div class="event-meta">
+          <div class="event-time">${escapeHtml(ts)}</div>
+          <span class="${eventPillClass(ev.category)}">${escapeHtml(ev.category || "generic")}</span>
+        </div>
+
+        <div class="event-main">
+          <div class="title">${escapeHtml(ev.title || "Event")}</div>
+          <div class="body">${escapeHtml(ev.body || "")}</div>
+        </div>
+
+        <div class="event-actions">
+          <button class="chip js-add">Add feedback</button>
+          <button class="chip js-view">View feedback (${ev.feedback_count || 0})</button>
+        </div>
+
+        <!-- feedback list (toggles open/closed) -->
+        <div id="fb-list-${ev.id}" class="hidden mt-1 col-span-3"></div>
+      `;
+
+      // Wire buttons
+      row.querySelector(".js-add")?.addEventListener("click", () => {
+        openFeedbackDialog({
+          analysis_id: ev.analysis_id,
+          event_id: ev.id,
+          category: (ev.category || "generic"),
+          body: ev.body || ""
+        });
+      });
+
+      row.querySelector(".js-view")?.addEventListener("click", () => {
+        toggleFeedbackList(ev.id);
+      });
+
+      listEl.appendChild(row);
+    });
+  };
+
+  const renderPager = ({ total, page, pages, startIndex }) => {
+    if (pages <= 1) { pagerEl.innerHTML = ""; return; }
+    const end = Math.min(total, startIndex + EV_PAGE_SIZE);
+
+    pagerEl.innerHTML = `
+      <div class="flex items-center justify-center gap-2 py-3">
+        <button class="pager-btn" data-page="first" ${page === 1 ? "disabled" : ""} title="First">&laquo;</button>
+        <button class="pager-btn" data-page="prev"  ${page === 1 ? "disabled" : ""} title="Previous">&lsaquo;</button>
+        <span class="pager-meta">Showing ${startIndex + 1}&ndash;${end} of ${total} • Page ${page}/${pages}</span>
+        <button class="pager-btn" data-page="next"  ${page === pages ? "disabled" : ""} title="Next">&rsaquo;</button>
+        <button class="pager-btn" data-page="last"  ${page === pages ? "disabled" : ""} title="Last">&raquo;</button>
       </div>
-
-      <div class="event-main">
-        <div class="title">${escapeHtml(ev.title || "Event")}</div>
-        <div class="body">${escapeHtml(ev.body || "")}</div>
-      </div>
-
-      <div class="event-actions">
-        <button class="chip js-add">Add feedback</button>
-        <button class="chip js-view">View feedback (${ev.feedback_count || 0})</button>
-      </div>
-
-      <!-- feedback list (toggles open/closed) -->
-      <div id="fb-list-${ev.id}" class="hidden mt-1 col-span-3"></div>
     `;
 
-    // Attach listeners (no template-string JS in attributes)
-    const addBtn  = row.querySelector(".js-add");
-    const viewBtn = row.querySelector(".js-view");
+    // Replace any previous handler
+    pagerEl.onclick = (ev) => {
+      const btn = ev.target.closest(".pager-btn");
+      if (!btn) return;
 
-    if (addBtn) {
-      addBtn.addEventListener("click", () => {
-        if (typeof openFeedbackDialog === "function") {
-          openFeedbackDialog({
-            analysis_id: ev.analysis_id,
-            event_id: ev.id,
-            category: (ev.category || "generic"),
-            body: ev.body || ""
-          });
-        }
-      });
-    }
+      const maxPages = Math.max(1, Math.ceil(EV_CACHE.length / EV_PAGE_SIZE));
+      if (btn.dataset.page === "first") goto(1);
+      else if (btn.dataset.page === "prev") goto(EV_PAGE - 1);
+      else if (btn.dataset.page === "next") goto(EV_PAGE + 1);
+      else if (btn.dataset.page === "last") goto(maxPages);
+    };
+  };
 
-    if (viewBtn) {
-      viewBtn.addEventListener("click", () => {
-        if (typeof toggleFeedbackList === "function") {
-          toggleFeedbackList(ev.id);
-        }
-      });
-    }
+  const goto = (page) => {
+    const total = EV_CACHE.length;
+    const pages = Math.max(1, Math.ceil(total / EV_PAGE_SIZE));
+    EV_PAGE = Math.min(Math.max(1, page), pages);
 
-    box.appendChild(row);
-  });
+    const start = (EV_PAGE - 1) * EV_PAGE_SIZE;
+    const slice = EV_CACHE.slice(start, start + EV_PAGE_SIZE);
+
+    paintEventsList(slice);
+    renderPager({ total, page: EV_PAGE, pages, startIndex: start });
+  };
+
+  // Initial render
+  goto(EV_PAGE || 1);
 }
 
 
@@ -1564,6 +1621,87 @@ async function loadFeedbacks({ q = "", entity_id = "", category = "" } = {}) {
   if (category)  params.set("category", category);
   params.set("limit", "500");
   return (await jsonFetch(api(`feedbacks?${params.toString()}`))) || [];
+}
+
+function renderEventsPager({ total, page, pages, startIndex }) {
+  const el = $("eventsPager");
+  if (!el) return;
+  if (pages <= 1) { el.innerHTML = ""; return; }
+
+  const end = Math.min(total, startIndex + EV_PAGE_SIZE);
+  el.innerHTML = `
+    <div class="flex items-center justify-center gap-2 py-3">
+      <button class="pager-btn" data-page="first" ${page === 1 ? "disabled" : ""} title="First">&laquo;</button>
+      <button class="pager-btn" data-page="prev"  ${page === 1 ? "disabled" : ""} title="Previous">&lsaquo;</button>
+      <span class="pager-meta">Showing ${startIndex + 1}&ndash;${end} of ${total} • Page ${page}/${pages}</span>
+      <button class="pager-btn" data-page="next"  ${page === pages ? "disabled" : ""} title="Next">&rsaquo;</button>
+      <button class="pager-btn" data-page="last"  ${page === pages ? "disabled" : ""} title="Last">&raquo;</button>
+    </div>
+  `;
+
+  // one delegated handler
+  el.onclick = (ev) => {
+    const btn = ev.target.closest(".pager-btn");
+    if (!btn) return;
+    const pages = Math.max(1, Math.ceil(EV_CACHE.length / EV_PAGE_SIZE));
+    if (btn.dataset.page === "first") renderEventsPage(1);
+    else if (btn.dataset.page === "prev") renderEventsPage(EV_PAGE - 1);
+    else if (btn.dataset.page === "next") renderEventsPage(EV_PAGE + 1);
+    else if (btn.dataset.page === "last") renderEventsPage(pages);
+  };
+}
+
+function paintEventsList(list) {
+  const box = $("eventsList");
+  if (!box) return;
+  box.innerHTML = "";
+
+  list.forEach(ev => {
+    const row = document.createElement("div");
+    row.className = "event-row";
+    const ts = ev.ts ? new Date(ev.ts).toLocaleString() : "";
+
+    row.innerHTML = `
+      <div class="event-meta">
+        <div class="event-time">${escapeHtml(ts)}</div>
+        <span class="${eventPillClass(ev.category)}">${escapeHtml(ev.category || "generic")}</span>
+      </div>
+      <div class="event-main">
+        <div class="title">${escapeHtml(ev.title || "Event")}</div>
+        <div class="body">${escapeHtml(ev.body || "")}</div>
+      </div>
+      <div class="event-actions">
+        <button class="chip js-add">Add feedback</button>
+        <button class="chip js-view">View feedback (${ev.feedback_count || 0})</button>
+      </div>
+      <div id="fb-list-${ev.id}" class="hidden mt-1 col-span-3"></div>
+    `;
+
+    row.querySelector(".js-add")?.addEventListener("click", () => {
+      openFeedbackDialog({
+        analysis_id: ev.analysis_id,
+        event_id: ev.id,
+        category: (ev.category || "generic"),
+        body: ev.body || ""
+      });
+    });
+
+    row.querySelector(".js-view")?.addEventListener("click", () => {
+      toggleFeedbackList(ev.id);
+    });
+
+    box.appendChild(row);
+  });
+}
+
+function renderEventsPage(page = 1) {
+  const total = EV_CACHE.length;
+  const pages = Math.max(1, Math.ceil(total / EV_PAGE_SIZE));
+  EV_PAGE = Math.min(Math.max(1, page), pages);
+  const start = (EV_PAGE - 1) * EV_PAGE_SIZE;
+  const slice = EV_CACHE.slice(start, start + EV_PAGE_SIZE);
+  paintEventsList(slice);
+  renderEventsPager({ total, page: EV_PAGE, pages, startIndex: start });
 }
 
 function renderFeedbackList(rows) {

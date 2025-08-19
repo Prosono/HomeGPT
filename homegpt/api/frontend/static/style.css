@@ -955,3 +955,11 @@ header, main, footer, .card, #detailsOverlay { position: relative; z-index: 1; }
 @media (prefers-reduced-motion: reduce){
   #particles-js{ display: none; }
 }
+
+#eventsPager{display:flex; justify-content:center; align-items:center; gap:10px; padding:10px 0}
+#eventsPager .pager-btn{
+  border:1px solid rgba(255,255,255,.12);
+  background:#0f172a; color:#e5e7eb; padding:8px 12px; border-radius:10px; cursor:pointer
+}
+#eventsPager .pager-btn[disabled]{opacity:.45; cursor:not-allowed}
+#eventsPager .pager-meta{color:#94a3b8; font-size:12.5px}
