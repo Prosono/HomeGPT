@@ -334,7 +334,50 @@ async function toggleFeedbackList(eid) {
   }
 })(); // ✅ close the IIFE
   
+// ---- HA deep-link builders (ingress safe) ----
+function haBasePath() {
+  const p = location.pathname, k = "/api/hassio_ingress/";
+  const i = p.indexOf(k);
+  return i >= 0 ? p.slice(0, i) || "/" : "/";
+}
+function joinUrl(a, b){ return a.replace(/\/+$/,"") + "/" + String(b||"").replace(/^\/+/,""); }
 
+const HA = {
+  url: (p="") => joinUrl(location.origin + haBasePath(), p),
+  entityStates:   (eid) => HA.url(`/developer-tools/state?entity_id=${encodeURIComponent(eid)}`),
+  entityHistory:  (eid) => HA.url(`/history?entity_id=${encodeURIComponent(eid)}`),
+  entitySettings: (eid) => HA.url(`/config/entities/entity/${encodeURIComponent(eid)}`),
+  devicePage:     (did) => HA.url(`/config/devices/device/${encodeURIComponent(did)}`)
+};
+
+// Convert plain text that may contain entity IDs into clickable links (+ optional chips)
+function linkifyEntities(text, { entity_ids = [], device_ids = [] } = {}) {
+  if (!text) return "";
+  // Escape first, then inject links
+  let html = escapeHtml(String(text));
+
+  // Replace entity-like tokens: domain.object_id
+  html = html.replace(/\b([a-z_]+)\.([a-z0-9_]+)\b/g, (m) => {
+    const href = HA.entityStates(m);
+    return `<a class="entity-link" data-entity-id="${m}" href="${href}" target="_blank" rel="noopener">${m}</a>`;
+  });
+
+  // Optional quick chips if your API provides arrays
+  const chips = [];
+  (entity_ids || []).forEach(eid => {
+    chips.push(`<a class="chip entity-chip" href="${HA.entitySettings(eid)}" target="_blank" rel="noopener">${escapeHtml(eid)}</a>`);
+  });
+  (device_ids || []).forEach(did => {
+    chips.push(`<a class="chip entity-chip" href="${HA.devicePage(did)}" target="_blank" rel="noopener">🔧 ${escapeHtml(did)}</a>`);
+  });
+
+  return chips.length ? `${html}<div class="entity-chip-row mt-1">${chips.join(" ")}</div>` : html;
+}
+
+// Run linkify inside already-rendered HTML (only text nodes between tags)
+function linkifyHtml(html="") {
+  return String(html).replace(/>([^<]+)</g, (_, txt) => ">" + linkifyEntities(txt) + "<");
+}
 
 function isNoiseEvent(ev){
   const t = _clean(ev.title), b = _clean(ev.body);
@@ -1269,12 +1312,12 @@ async function loadEvents() {
   if (!listEl) return;
 
   rows = rows
-  .filter(ev => !isNoiseEvent(ev))
-  .map(ev => ({ ...ev,
-    _title: makeNiceTitle(ev),
-    _bodyHtml: formatBody(ev)
-  }));
-
+    .filter(ev => !isNoiseEvent(ev))
+    .map(ev => ({
+      ...ev,
+      _titleHtml: linkifyEntities(makeNiceTitle(ev), { entity_ids: ev.entity_ids, device_ids: ev.device_ids }),
+      _bodyHtml:  linkifyEntities(ev.body || "",       { entity_ids: ev.entity_ids, device_ids: ev.device_ids })
+    }));
   // Keep a cache for paging
   EV_CACHE = rows;
 
@@ -1308,8 +1351,8 @@ async function loadEvents() {
         </div>
 
         <div class="event-main">
-          <div class="title">${escapeHtml(ev._title || ev.title || "Event")}</div>
-          <div class="body">${ev._bodyHtml || escapeHtml(ev.body || "")}</div>
+          <div class="title">${ev._titleHtml || "Event"}</div>
+          <div class="body">${ev._bodyHtml || ""}</div>
         </div>
 
         <div class="event-actions"> … </div>
