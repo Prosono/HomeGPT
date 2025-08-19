@@ -351,10 +351,27 @@ const HA = {
 };
 
 // Convert plain text that may contain entity IDs into clickable links (+ optional chips)
-function linkifyEntities(text, { entity_ids = [], device_ids = [] } = {}) {
+function linkifyEntities(
+  text,
+  { entity_ids = [], device_ids = [], alreadyEscaped = false } = {}
+) {
   if (!text) return "";
-  // Escape first, then inject links
-  let html = escapeHtml(String(text));
+
+  // Coerce possible CSV/string/undefined → array
+  const toArr = (v) => {
+    if (!v) return [];
+    if (Array.isArray(v)) return v;
+    if (typeof v === "string") {
+      return v.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+    }
+    return [];
+  };
+
+  const eids = toArr(entity_ids);
+  const dids = toArr(device_ids);
+
+  // If the source is raw text, escape; if it came from HTML (e.g. marked output), don't.
+  let html = alreadyEscaped ? String(text) : escapeHtml(String(text));
 
   // Replace entity-like tokens: domain.object_id
   html = html.replace(/\b([a-z_]+)\.([a-z0-9_]+)\b/g, (m) => {
@@ -362,13 +379,17 @@ function linkifyEntities(text, { entity_ids = [], device_ids = [] } = {}) {
     return `<a class="entity-link" data-entity-id="${m}" href="${href}" target="_blank" rel="noopener">${m}</a>`;
   });
 
-  // Optional quick chips if your API provides arrays
+  // Optional chips if your API supplies ids
   const chips = [];
-  (entity_ids || []).forEach(eid => {
-    chips.push(`<a class="chip entity-chip" href="${HA.entitySettings(eid)}" target="_blank" rel="noopener">${escapeHtml(eid)}</a>`);
+  eids.forEach(eid => {
+    chips.push(
+      `<a class="chip entity-chip" href="${HA.entitySettings(eid)}" target="_blank" rel="noopener">${escapeHtml(eid)}</a>`
+    );
   });
-  (device_ids || []).forEach(did => {
-    chips.push(`<a class="chip entity-chip" href="${HA.devicePage(did)}" target="_blank" rel="noopener">🔧 ${escapeHtml(did)}</a>`);
+  dids.forEach(did => {
+    chips.push(
+      `<a class="chip entity-chip" href="${HA.devicePage(did)}" target="_blank" rel="noopener">🔧 ${escapeHtml(did)}</a>`
+    );
   });
 
   return chips.length ? `${html}<div class="entity-chip-row mt-1">${chips.join(" ")}</div>` : html;
