@@ -346,23 +346,10 @@ function joinUrl(a, b){ return a.replace(/\/+$/,"") + "/" + String(b||"").replac
 const HA = {
   url: (p="") => joinUrl(location.origin + haBasePath(), p),
 
-  // Primary links that are stable:
-  entityHistory:  (eid) => HA.url(`/history?entity_id=${encodeURIComponent(eid)}`),
-  entityApi:      (eid) => HA.url(`/api/states/${encodeURIComponent(eid)}`),
-
-  // Entity “manage” link with safe fallback:
-  entityManage: (eid) => {
-    // Try the detail route, but also add a search param so older builds at least filter the list.
-    const q = encodeURIComponent(eid);
-    return HA.url(`/config/entities/entity/${q}?search=${q}&q=${q}`);
-  },
-
-  // Device page + fallback to search in the Devices UI
-  deviceManage: (did) => {
-    const q = encodeURIComponent(did);
-    // detail route (newer UIs) + fallback filter params (older UIs)
-    return HA.url(`/config/devices/device/${q}?search=${q}&q=${q}`);
-  }
+  // stable deep links
+  entityHistory: (eid) => HA.url(`/history?entity_id=${encodeURIComponent(eid)}`),
+  entityStates:  (eid) => HA.url(`/developer-tools/state?entity_id=${encodeURIComponent(eid)}`),
+  deviceManage:  (did) => HA.url(`/config/devices/device/${encodeURIComponent(did)}`)
 };
 
 // sensible default for clicking the in-text entity mention:
@@ -371,44 +358,44 @@ function defaultEntityHref(eid) {
   return ["sensor","binary_sensor","climate","input_number","number","utility_meter"]
     .includes(domain)
     ? HA.entityHistory(eid)
-    : HA.entityManage(eid); // non-sensors → go manage view
+    : HA.entityStates(eid);
 }
-
 // ---- Linkifier
 function linkifyEntities(
   text,
-  { entity_ids = [], device_ids = [], alreadyEscaped = false } = {}
+  { entity_ids = [], device_ids = [], addChips = true, alreadyEscaped = false } = {}
 ) {
   if (!text) return "";
 
-  const toArr = (v) => {
-    if (!v) return [];
-    if (Array.isArray(v)) return v;
-    if (typeof v === "string") return v.split(/[,\s]+/).map(s=>s.trim()).filter(Boolean);
-    return [];
-  };
-  const eids = toArr(entity_ids);
-  const dids = toArr(device_ids);
+  const toArr = (v) => Array.isArray(v) ? v
+    : typeof v === "string" ? v.split(/[,\s]+/).map(s=>s.trim()).filter(Boolean)
+    : [];
+  const eids = [...new Set(toArr(entity_ids))];
+  const dids = [...new Set(toArr(device_ids))];
 
   let html = alreadyEscaped ? String(text) : escapeHtml(String(text));
 
-  // link entity-like tokens in the text
-  html = html.replace(/\b([a-z_]+)\.([\w:-]+)\b/g, (m) => {
-    const href = defaultEntityHref(m);
-    return `<a class="entity-link" data-entity-id="${m}" href="${href}" target="_blank" rel="noopener">${m}</a>`;
-  });
+  // link inline entity-id looking tokens
+  html = html.replace(/\b([a-z_]+)\.([\w:-]+)\b/g, (m) =>
+    `<a class="entity-link" data-entity-id="${m}" href="${defaultEntityHref(m)}" target="_blank" rel="noopener">${m}</a>`
+  );
 
-  // chips: Manage, JSON, Device (if known)
-  const chips = [];
-  eids.forEach(eid => {
-    chips.push(`<a class="chip entity-chip" href="${HA.entityManage(eid)}" target="_blank" rel="noopener">⚙️ Manage</a>`);
-    chips.push(`<a class="chip entity-chip" href="${HA.entityApi(eid)}"     target="_blank" rel="noopener">{} JSON</a>`);
-  });
-  dids.forEach(did => {
-    chips.push(`<a class="chip entity-chip" href="${HA.deviceManage(did)}"  target="_blank" rel="noopener">🔧 Device</a>`);
-  });
+  if (addChips) {
+    const chips = [];
+    if (eids.length) {
+      const eid = eids[0];
+      chips.push(`<a class="chip entity-chip" href="${HA.entityStates(eid)}" target="_blank" rel="noopener">⚙️ Manage</a>`);
+    }
+    if (dids.length) {
+      const did = dids[0];
+      chips.push(`<a class="chip entity-chip" href="${HA.deviceManage(did)}" target="_blank" rel="noopener">🔧 Device</a>`);
+    }
+    if (chips.length) {
+      html += `<div class="entity-chip-row mt-1">${chips.join(" ")}</div>`;
+    }
+  }
 
-  return chips.length ? `${html}<div class="entity-chip-row mt-1">${chips.join(" ")}</div>` : html;
+  return html;
 }
 
 
@@ -1353,8 +1340,8 @@ async function loadEvents() {
     .filter(ev => !isNoiseEvent(ev))
     .map(ev => ({
       ...ev,
-      _titleHtml: linkifyEntities(makeNiceTitle(ev), { entity_ids: ev.entity_ids, device_ids: ev.device_ids }),
-      _bodyHtml:  linkifyEntities(ev.body || "",       { entity_ids: ev.entity_ids, device_ids: ev.device_ids })
+      _titleHtml: linkifyEntities(makeNiceTitle(ev), { addChips: false }),
+      _bodyHtml:  linkifyEntities(ev.body || "", { entity_ids: ev.entity_ids, device_ids: ev.device_ids, addChips: true })
     }));
   // Keep a cache for paging
   EV_CACHE = rows;
