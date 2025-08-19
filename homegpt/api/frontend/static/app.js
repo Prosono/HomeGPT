@@ -12,14 +12,6 @@ const modeIcon = (mode) => {
   return '<i class="mdi mdi-note-text-outline analysis-icon" aria-hidden="true"></i>';
 };
 
-// ---- HA deep-link builders ----
-const HA = {
-  url: (p="") => `${location.origin}${p.startsWith("/") ? p : "/"+p}`,
-  entityStates:  (eid) => HA.url(`developer-tools/state?entity_id=${encodeURIComponent(eid)}`),
-  entityHistory: (eid) => HA.url(`history?entity_id=${encodeURIComponent(eid)}`),
-  entitySettings:(eid) => HA.url(`config/entities/entity/${encodeURIComponent(eid)}`),
-  devicePage:    (did) => HA.url(`config/devices/device/${encodeURIComponent(did)}`),
-};
 
 const CAT_WORDS = ["security","comfort","energy","anomalies","presence","actions"];
 
@@ -342,32 +334,7 @@ async function toggleFeedbackList(eid) {
   }
 })(); // ✅ close the IIFE
   
-// Convert plain text that may contain entity IDs into clickable links
-function linkifyEntities(text, { entity_ids = [], device_ids = [] } = {}) {
-  if (!text) return "";
-  // Start from escaped HTML so we don't inject raw text
-  let html = escapeHtml(String(text));
 
-  // 1) Replace any entity_id-looking tokens in the text
-  html = html.replace(/\b([a-z_]+)\.([a-z0-9_]+)\b/g, (m) => {
-    // m is already validated by the regex
-    const href = HA.entityStates(m);               // default target = States
-    return `<a class="entity-link" href="${href}" target="_blank" rel="noopener noreferrer" title="Open in Developer Tools → States">${m}</a>`;
-  });
-
-  // 2) Append optional quick chips (if your event row carries arrays)
-  const chips = [];
-  (entity_ids || []).forEach(eid => {
-    chips.push(`<a class="chip entity-chip" href="${HA.entitySettings(eid)}" target="_blank" rel="noopener" title="Entity settings">${escapeHtml(eid)}</a>`);
-  });
-  (device_ids || []).forEach(did => {
-    chips.push(`<a class="chip entity-chip" href="${HA.devicePage(did)}" target="_blank" rel="noopener" title="Device page">${escapeHtml(did)}</a>`);
-  });
-
-  return chips.length
-    ? `${html}<div class="entity-chip-row">${chips.join(" ")}</div>`
-    : html;
-}
 
 function isNoiseEvent(ev){
   const t = _clean(ev.title), b = _clean(ev.body);
@@ -1333,8 +1300,6 @@ async function loadEvents() {
       row.className = "event-row";
 
       const ts = ev.ts ? new Date(ev.ts).toLocaleString() : "";
-      const linkedTitle = linkifyEntities(ev.title || "", { entity_ids: ev.entity_ids, device_ids: ev.device_ids });
-      const linkedBody  = linkifyEntities(ev.body  || "", { entity_ids: ev.entity_ids, device_ids: ev.device_ids });
 
       row.innerHTML = `
         <div class="event-meta">
@@ -1343,8 +1308,8 @@ async function loadEvents() {
         </div>
 
         <div class="event-main">
-          <div class="title">${linkedTitle || "Event"}</div>
-          <div class="body">${linkedBody}</div>
+          <div class="title">${escapeHtml(ev._title || ev.title || "Event")}</div>
+          <div class="body">${ev._bodyHtml || escapeHtml(ev.body || "")}</div>
         </div>
 
         <div class="event-actions"> … </div>
@@ -1823,8 +1788,6 @@ function paintEventsList(list) {
 
   list.forEach(ev => {
     const row = document.createElement("div");
-    const linkedTitle = linkifyEntities(ev.title || "", { entity_ids: ev.entity_ids, device_ids: ev.device_ids });
-    const linkedBody  = linkifyEntities(ev.body  || "", { entity_ids: ev.entity_ids, device_ids: ev.device_ids });    
     row.className = "event-row";
     const ts = ev.ts ? new Date(ev.ts).toLocaleString() : "";
 
@@ -1834,8 +1797,8 @@ function paintEventsList(list) {
         <span class="${eventPillClass(ev.category)}">${escapeHtml(ev.category || "generic")}</span>
       </div>
       <div class="event-main">
-        <div class="title">${linkedTitle || "Event"}</div>
-        <div class="body">${linkedBody}</div>
+        <div class="title">${escapeHtml(ev.title || "Event")}</div>
+        <div class="body">${escapeHtml(ev.body || "")}</div>
       </div>
       <div class="event-actions">
         <button class="chip js-add">Add feedback</button>
