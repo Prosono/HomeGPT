@@ -484,6 +484,7 @@ a.entity-chip { text-decoration: none }
   --fbm-shadow:    0 10px 35px rgba(0,0,0,.45), 0 2px 10px rgba(0,0,0,.35);
 }
 
+dialog:not([open]) { display: none !important; }
 /* Dialog shell */
 #dlg-manage-feedback {
   width: min(1200px, 96vw);
