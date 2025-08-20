@@ -1549,68 +1549,6 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// SPECTRA ASK
-
-async function askSpectra(q) {
-  const box = $("askResult");
-  if (!box) return;
-  box.classList.remove("hidden");
-  box.innerHTML = `<div class="text-sm text-gray-400">Thinking…</div>`;
-
-  try {
-    const res = await fetch(api("ask"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ q })
-    });
-    const data = await res.json();
-
-    const md = window.marked?.parse(data.answer_md || "") || escapeHtml(data.answer_md || "");
-    let html = `<div class="ask-answer">${md}</div>`;
-
-    if (data.automation_yaml) {
-      html += `
-        <div class="mt-3">
-          <div class="row"><span class="text-sm text-gray-400">Automation YAML</span>
-            <button class="chip" id="copyYaml">Copy</button>
-          </div>
-          <pre><code>${escapeHtml(data.automation_yaml)}</code></pre>
-        </div>`;
-    }
-    if (Array.isArray(data.links) && data.links.length) {
-      html += `<div class="ask-links">${data.links.map(l =>
-        `<a class="chip" target="_blank" rel="noopener" href="${HA.url(l.url || l.href || "/")}">${escapeHtml(l.label || "Open")}</a>`
-      ).join(" ")}</div>`;
-    }
-
-    // turn inline entity_ids into links + add chips (uses your linkifier)
-    box.innerHTML = linkifyHtml(html);
-
-    // copy button
-    box.querySelector("#copyYaml")?.addEventListener("click", () => {
-      navigator.clipboard.writeText(data.automation_yaml || "");
-    });
-
-  } catch (e) {
-    console.error(e);
-    box.innerHTML = `<div class="text-red-400">Ask failed: ${e.message}</div>`;
-  }
-}
-
-$("askSend")?.addEventListener("click", () => {
-  const q = $("askInput").value.trim();
-  if (q) askSpectra(q);
-});
-$("askInput")?.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") {
-    e.preventDefault();
-    const q = e.target.value.trim();
-    if (q) askSpectra(q);
-  }
-});
-
-// SPECTRA ASK END
-
 // ---------- Modal (with Markdown) ----------
 async function openModal(row) {
   const overlay   = $("detailsOverlay");
