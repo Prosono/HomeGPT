@@ -639,22 +639,31 @@ dialog:not([open]) { display: none !important; }
   box-shadow: 0 10px 24px rgba(0,0,0,.35);
 }
 
-/* Footer under the heat grid: legend (left) + range (right) */
+/* Footer under the heat grid:
+   legend on its own row, range on its own row beneath it */
 .heat-footer {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
+  flex-direction: column;       /* <-- force vertical stack */
+  align-items: flex-start;      /* left align */
+  gap: 8px;
   margin-top: 10px;
 }
 @media (max-width: 640px) {
-  .heat-footer { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .heat-footer { gap: 6px; }
 }
 
 /* Compact Range block */
-.hc-range { display: flex; align-items: center; gap: 10px; }
-.hc-range .hc-title { margin: 0; font-weight: 800; font-size: .9rem; opacity: .9; }
+.hc-range {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.hc-range .hc-title {
+  margin: 0;
+  font-weight: 800;
+  font-size: .9rem;
+  opacity: .9;
+}
 
 /* =========================================================
    Controls panel (right) — compact
@@ -662,7 +671,7 @@ dialog:not([open]) { display: none !important; }
 .glass {
   border: 1px solid var(--border);
   border-radius: 16px;
-  padding: 12px; /* smaller than before */
+  padding: 12px; /* smaller */
   background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
   box-shadow: 0 8px 20px rgba(0,0,0,.30);
 }
@@ -690,7 +699,7 @@ dialog:not([open]) { display: none !important; }
    ========================================================= */
 #hm-threshold {
   width: 100%;
-  height: 4px;               /* was 6px */
+  height: 4px;               /* shorter */
   appearance: none;
   background: linear-gradient(90deg, rgba(99,102,241,.25), rgba(236,72,153,.25));
   border-radius: 999px;
@@ -699,7 +708,7 @@ dialog:not([open]) { display: none !important; }
 }
 #hm-threshold::-webkit-slider-thumb {
   appearance: none;
-  width: 14px; height: 14px; /* was 18x18 */
+  width: 14px; height: 14px;
   border-radius: 50%;
   background: radial-gradient(circle at 30% 30%, #e0e7ff, #a78bfa 60%);
   border: 2px solid rgba(255,255,255,.5);
@@ -707,7 +716,7 @@ dialog:not([open]) { display: none !important; }
   cursor: pointer;
 }
 #hm-threshold::-moz-range-thumb {
-  width: 14px; height: 14px; /* was 18x18 */
+  width: 14px; height: 14px;
   border-radius: 50%;
   background: radial-gradient(circle at 30% 30%, #e0e7ff, #a78bfa 60%);
   border: 2px solid rgba(255,255,255,.5);
@@ -716,16 +725,20 @@ dialog:not([open]) { display: none !important; }
 }
 
 /* =========================================================
-   Heatmap grid polish
+   Heatmap grid — horizontal scroll for >24h
    ========================================================= */
 .heatmap {
   display: grid;
   gap: 6px;
-  padding: 6px 6px 8px; /* tighter bottom now that footer exists */
-  overflow-x: auto;
+  padding: 6px 6px 8px;  /* tighter bottom now that footer exists */
+  overflow-x: auto;      /* <-- allow horizontal scroll */
+  min-width: 100%;       /* fill the card when few columns */
+  width: max-content;    /* grow to fit all cells so it can scroll */
 }
 .hm-label {
-  position: sticky; left: 0; z-index: 1;
+  position: sticky;
+  left: 0;
+  z-index: 1;
   background: rgba(17,24,39,.5);
   backdrop-filter: blur(2px);
   padding: 0 8px 0 6px;
@@ -751,7 +764,7 @@ dialog:not([open]) { display: none !important; }
 }
 .hm-cell.highlight { box-shadow: 0 0 0 2px #93c5fd inset; }
 
-/* Tooltip: tighter + pointer */
+/* Tooltip */
 .hm-tooltip {
   position: absolute;
   top: -8px; left: 50%;
