@@ -637,26 +637,6 @@ p:hover .feedback-btn {
   --fbm-shadow:    0 10px 35px rgba(0,0,0,.45), 0 2px 10px rgba(0,0,0,.35);
 }
 
-/* Dialog shells */
-#dlg-manage-feedback,
-#dlg-edit-feedback {
-  width: min(980px, 92vw);
-  max-height: 90vh;
-  padding: 0;
-  border: 1px solid var(--fbm-border);
-  border-radius: 16px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent) , var(--fbm-bg);
-  color: var(--fbm-text);
-  box-shadow: var(--fbm-shadow);
-  overflow: hidden;
-}
-
-/* Nice backdrop */
-#dlg-manage-feedback::backdrop,
-#dlg-edit-feedback::backdrop {
-  background: rgba(8,11,19,0.55);
-  backdrop-filter: blur(6px);
-}
 
 /* Generic dialog sections */
 .fbm-head {
@@ -979,3 +959,44 @@ a.entity-link:hover { text-decoration: none; filter: brightness(1.1); }
 a.entity-chip { text-decoration: none; }
 
 .device-chip-loader { cursor: pointer; }
+
+/* Feedback Manager — bigger, responsive, and scrollable */
+#dlg-manage-feedback {
+  /* size */
+  width: min(1200px, 96vw);
+  height: min(85vh, 900px);
+  max-width: none;
+  /* look & layout */
+  padding: 16px 16px 8px;
+  border-radius: 16px;
+  display: grid;
+  grid-template-rows: auto auto 1fr; /* header row, controls row, list area */
+}
+
+/* put the three controls on one line and let them breathe */
+#dlg-manage-feedback #fbm-search,
+#dlg-manage-feedback #fbm-entity,
+#dlg-manage-feedback #fbm-category,
+#dlg-manage-feedback #fbm-refresh {
+  margin: 0;
+}
+
+#dlg-manage-feedback .fbm-controls,
+#dlg-manage-feedback form,               /* in case you wrapped them in a <form> */
+#dlg-manage-feedback .controls {         /* fallback selector */
+  display: grid;
+  grid-template-columns: 1fr 1fr 240px auto; /* search | entity | category | refresh */
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+/* the list fills the remaining space and scrolls */
+#fbm-list {
+  min-height: 0;     /* critical so the grid lets it shrink */
+  overflow: auto;    /* own scrollbar */
+  padding-top: 4px;
+}
+
+/* optional: nicer backdrop */
+#dlg-manage-feedback::backdrop { background: rgba(0,0,0,.45); }
