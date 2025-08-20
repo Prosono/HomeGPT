@@ -235,42 +235,45 @@
       <!-- ================================================================
           ANALYSIS HEATMAP (glow-up)
           ================================================================ -->
+
           <section class="mb-6" aria-labelledby="heatmap-title">
             <div class="section-head">
               <h2 id="heatmap-title">Analysis Heatmap</h2>
               <div class="sub">X: hour • Y: category • intensity = findings/severity</div>
             </div>
-          
+
             <div class="heat-wrap">
-              <!-- Heatmap canvas -->
+              <!-- Heatmap card -->
               <div class="heat-card">
                 <div id="analysisHeatmap" class="heatmap"></div>
-          
-                <!-- Legend -->
-                <div class="hm-legend" aria-hidden="true">
-                  <span>Low</span>
-                  <i class="hm-swatch swatch-1"></i>
-                  <i class="hm-swatch swatch-2"></i>
-                  <i class="hm-swatch swatch-3"></i>
-                  <i class="hm-swatch swatch-4"></i>
-                  <i class="hm-swatch swatch-5"></i>
-                  <span>High</span>
-                </div>
-              </div>
-          
-              <!-- Controls -->
-              <aside class="heat-controls glass">
-                <!-- Time range -->
-                <div class="hc-block">
-                  <div class="hc-title">Range</div>
-                  <div class="btn-toggle" role="group" aria-label="Time range">
-                    <button class="chip" data-hm-range="24"  aria-pressed="false">24h</button>
-                    <button class="chip" data-hm-range="48"  aria-pressed="false">48h</button>
-                    <button class="chip" data-hm-range="168" aria-pressed="true">7d</button>
+
+                <!-- Footer: legend (left) + range (right) -->
+                <div class="heat-footer">
+                  <!-- Legend -->
+                  <div class="hm-legend" aria-hidden="true">
+                    <span>Low</span>
+                    <i class="hm-swatch swatch-1"></i>
+                    <i class="hm-swatch swatch-2"></i>
+                    <i class="hm-swatch swatch-3"></i>
+                    <i class="hm-swatch swatch-4"></i>
+                    <i class="hm-swatch swatch-5"></i>
+                    <span>High</span>
+                  </div>
+
+                  <!-- Range (moved under the heatmap) -->
+                  <div class="hc-range">
+                    <div class="hc-title">Range</div>
+                    <div class="btn-toggle" role="group" aria-label="Time range">
+                      <button class="chip" data-hm-range="24"  aria-pressed="false">24h</button>
+                      <button class="chip" data-hm-range="48"  aria-pressed="true">48h</button>
+                      <button class="chip" data-hm-range="168" aria-pressed="false">7d</button>
+                    </div>
                   </div>
                 </div>
-          
-                <!-- Severity -->
+              </div>
+
+              <!-- Controls (right) — now shorter: only severity + filters -->
+              <aside class="heat-controls glass">
                 <div class="hc-block">
                   <div class="hc-title flex items-center gap-2">
                     <span>Min severity</span>
@@ -278,8 +281,7 @@
                   </div>
                   <input id="hm-threshold" type="range" min="0" max="6" step="1" value="0" />
                 </div>
-          
-                <!-- Categories -->
+
                 <div class="hc-block">
                   <div class="hc-title">Filter</div>
                   <div class="btn-toggle flex-wrap" role="group" aria-label="Category filter">
