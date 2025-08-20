@@ -1522,6 +1522,33 @@ async function runAnalysisNow() {
   }
 }
 
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('.btn-toggle .chip');
+  if (!btn) return;
+
+  const group = btn.closest('.btn-toggle');
+
+  // Single-select groups (range) -> only one true
+  if (btn.dataset.hmRange) {
+    group.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', 'false'));
+    btn.setAttribute('aria-pressed', 'true');
+    return;
+  }
+
+  // Multi-select groups (categories), except "All"
+  if (btn.dataset.hmFilter === 'all') {
+    group.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed','false'));
+    btn.setAttribute('aria-pressed','true');
+  } else {
+    // toggle pressed
+    const pressed = btn.getAttribute('aria-pressed') === 'true';
+    btn.setAttribute('aria-pressed', pressed ? 'false' : 'true');
+    // ensure "All" turns off when any specific filter is on
+    const allBtn = group.querySelector('[data-hm-filter="all"]');
+    if (allBtn) allBtn.setAttribute('aria-pressed','false');
+  }
+});
+
 // ---------- Modal (with Markdown) ----------
 async function openModal(row) {
   const overlay   = $("detailsOverlay");
@@ -1547,6 +1574,8 @@ async function openModal(row) {
   }
   document.addEventListener("keydown", overlay._escHandler);
 
+
+  
   // (re)bind close buttons each time we open
   const bindClose = () => closeModal();
   $("overlayBackdrop")?.addEventListener("click", bindClose, { once: true });

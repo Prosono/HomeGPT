@@ -392,26 +392,6 @@ body {
 .category-anomalies{ background: #8b5cf6 }
 .timeline-entry .details { display: none; margin-top: 8px; font-size: .9rem; line-height: 1.4 }
 
-.heatmap { display: grid; gap: 4px; padding-bottom: 6px; overflow-x: auto }
-.hm-label {
-  position: sticky; left: 0; z-index: 1;
-  background: rgba(17,24,39,.6); backdrop-filter: blur(2px);
-  padding-right: 6px; text-align: right; font-size: .8rem; color: #cbd5e1; align-self: center;
-}
-.hm-cell {
-  width: 22px; height: 22px; border-radius: 4px; background: #0f172a;
-  outline: 1px solid rgba(255,255,255,.04); position: relative; cursor: pointer;
-  transition: transform .06s, box-shadow .06s;
-}
-.hm-cell:hover { transform: scale(1.08); box-shadow: 0 0 0 2px rgba(255,255,255,.08) inset }
-.hm-tooltip {
-  position: absolute; top: -8px; left: 50%; transform: translate(-50%, -100%);
-  background: rgba(15,23,42,.98); color: #e5e7eb; padding: 6px 8px; font-size: 11px;
-  border-radius: 6px; white-space: nowrap; pointer-events: none; display: none;
-  box-shadow: 0 6px 18px rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.08); max-width: 28rem;
-}
-.hm-cell:hover .hm-tooltip { display: block }
-.hm-cell.highlight { box-shadow: 0 0 0 2px #93c5fd inset }
 
 /* ==========================================================================
    Feedback UI (general)
@@ -630,6 +610,172 @@ dialog:not([open]) { display: none !important; }
   background: rgba(148,163,184,.35);
   border-radius: 10px; border: 2px solid transparent; background-clip: content-box;
 }
+
+/* ===========================
+   Heatmap Glow-Up
+   =========================== */
+
+/* Layout: heatmap left, controls right (stack on mobile) */
+.heat-wrap {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 16px;
+  align-items: start;
+}
+@media (max-width: 980px) {
+  .heat-wrap { grid-template-columns: 1fr; }
+}
+
+/* Glass card for the heatmap itself */
+.heat-card {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px;
+  background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.04));
+  box-shadow: 0 10px 24px rgba(0,0,0,.35);
+}
+
+/* Controls panel (glass) */
+.glass {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px;
+  background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
+  box-shadow: 0 8px 20px rgba(0,0,0,.30);
+}
+.heat-controls { display: grid; gap: 14px; }
+.hc-block { display: grid; gap: 8px; }
+.hc-title { font-weight: 800; letter-spacing: .2px; color: var(--fg); opacity: .9; }
+.hc-title .value { font-weight: 800; color: #c7d2fe; }
+
+/* Toggle group look for chips */
+.btn-toggle { display: flex; gap: 8px; }
+.btn-toggle .chip {
+  background: var(--chip);
+  border: 1px solid var(--border);
+  transition: transform .12s ease, background .12s ease, border-color .12s ease, box-shadow .12s ease;
+}
+.btn-toggle .chip[aria-pressed="true"] {
+  background: color-mix(in oklab, var(--brand1) 22%, transparent);
+  border-color: color-mix(in oklab, var(--brand1) 48%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--brand1) 30%, transparent) inset;
+}
+.btn-toggle .chip:hover { transform: translateY(-1px); }
+
+/* Slider styling (keep it accessible) */
+#hm-threshold {
+  width: 100%;
+  height: 6px;
+  appearance: none;
+  background: linear-gradient(90deg,
+    rgba(99,102,241,.25),
+    rgba(236,72,153,.25)
+  );
+  border-radius: 999px;
+  outline: none;
+  border: 1px solid rgba(255,255,255,.12);
+}
+#hm-threshold::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px; height: 18px; border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #e0e7ff, #a78bfa 60%);
+  border: 2px solid rgba(255,255,255,.5);
+  box-shadow: 0 4px 16px rgba(0,0,0,.35);
+  cursor: pointer;
+}
+#hm-threshold::-moz-range-thumb {
+  width: 18px; height: 18px; border-radius: 50%;
+  background: radial-gradient(circle at 30% 30%, #e0e7ff, #a78bfa 60%);
+  border: 2px solid rgba(255,255,255,.5);
+  box-shadow: 0 4px 16px rgba(0,0,0,.35);
+  cursor: pointer;
+}
+
+/* Heatmap grid polish */
+.heatmap {
+  display: grid;
+  gap: 6px;
+  padding: 6px 6px 10px;
+  overflow-x: auto;
+}
+.hm-label {
+  position: sticky; left: 0; z-index: 1;
+  background: rgba(17,24,39,.5);
+  backdrop-filter: blur(2px);
+  padding: 0 8px 0 6px;
+  font-size: .82rem;
+  color: #cbd5e1;
+  border-radius: 6px;
+}
+
+/* Cells with subtle inner glow + nicer hover */
+.hm-cell {
+  width: 24px; height: 24px;
+  border-radius: 6px;
+  background: #0f172a;
+  outline: 1px solid rgba(255,255,255,0.06);
+  position: relative;
+  cursor: pointer;
+  transition: transform .08s ease, box-shadow .12s ease, outline-color .12s ease;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.03);
+}
+.hm-cell:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(0,0,0,.35), inset 0 0 0 2px rgba(255,255,255,.06);
+}
+.hm-cell.highlight { box-shadow: 0 0 0 2px #93c5fd inset; }
+
+/* Tooltip: tighter + pointer */
+.hm-tooltip {
+  position: absolute;
+  top: -8px; left: 50%;
+  transform: translate(-50%, -100%);
+  background: rgba(15, 23, 42, .98);
+  color: #e5e7eb;
+  padding: 6px 8px;
+  font-size: 11px;
+  border-radius: 6px;
+  pointer-events: none;
+  display: none;
+  box-shadow: 0 6px 18px rgba(0,0,0,.35);
+  border: 1px solid rgba(255,255,255,.08);
+  max-width: 28rem;
+}
+.hm-tooltip::after {
+  content: "";
+  position: absolute;
+  bottom: -5px; left: 50%;
+  transform: translateX(-50%);
+  border: 6px solid transparent;
+  border-top-color: rgba(15,23,42,.98);
+}
+.hm-cell:hover .hm-tooltip { display: block; }
+
+/* Legend */
+.hm-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: .85rem;
+  color: #94a3b8;
+}
+.hm-swatch {
+  display: inline-block;
+  width: 22px; height: 10px; border-radius: 6px;
+  border: 1px solid rgba(255,255,255,.12);
+}
+.swatch-1 { background: #0b1a3a; }
+.swatch-2 { background: #13285a; }
+.swatch-3 { background: #1b3274; }
+.swatch-4 { background: #224093; }
+.swatch-5 { background: #f59e0b; }
+
+/* Make cells slightly smaller on very narrow screens */
+@media (max-width: 420px) {
+  .hm-cell { width: 20px; height: 20px; border-radius: 5px; }
+}
+
 
 /* ==========================================================================
    Events list & Pager
