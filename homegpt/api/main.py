@@ -15,33 +15,37 @@ This version introduces these improvements:
 
 4) Topology context is fetched automatically and included in passive runs.
 """
-import os
-from zoneinfo import ZoneInfo
+# ── Standard Library ────────────────────────────────────────────────────────────
 import asyncio
 import json
 import logging
-from pathlib import Path
 import math
-from typing import Iterable
-from datetime import datetime, timezone
-from statistics import mean
-from typing import Any
+import os
 import re
-from pydantic import BaseModel
-from fastapi import HTTPException
-from typing import Optional
-from pydantic import BaseModel
-from fastapi import Query
-from typing import Optional, List
-from fastapi import Body
-from fastapi import Path as PathParam
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from statistics import mean
+from typing import Any, Dict, Iterable, List, Optional
 
+from zoneinfo import ZoneInfo
+
+# ── Third-Party ────────────────────────────────────────────────────────────────
+import requests
 import yaml
-from fastapi import FastAPI, Query, Body
+from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from datetime import datetime, timezone, timedelta
+from pydantic import BaseModel
+
+from typing import Optional, Dict, Any
+import json, time, os
+import requests
+from fastapi import HTTPException
+
+# ── First-Party / Local (project imports go here) ──────────────────────────────
+# from . import something
 
 from homegpt.app.topology import (
     fetch_topology_snapshot,
@@ -472,7 +476,254 @@ async def _fetch_history_all_entities(
 
     return combined
 
+# Start SPECRA ASK
 
+# =========================
+# Ask Spectra (LLM Orchestrator)
+# =========================
+from typing import Optional, Dict, Any
+import json, time, os
+import requests
+from fastapi import HTTPException
+
+# ---- Optional HA API session (works in add-on or with HA_URL/HA_TOKEN) ----
+def _ha_api_base_and_headers():
+    sup = os.getenv("SUPERVISOR_TOKEN")
+    if sup:
+        return "http://supervisor/core/api", {"Authorization": f"Bearer {sup}", "Content-Type": "application/json"}
+    ha_url, ha_tok = os.getenv("HA_URL"), os.getenv("HA_TOKEN")
+    if ha_url and ha_tok:
+        return f"{ha_url.rstrip('/')}/api", {"Authorization": f"Bearer {ha_tok}", "Content-Type": "application/json"}
+    return None, None
+
+def _http_get(url, headers=None, params=None, timeout=15):
+    try:
+        r = requests.get(url, headers=headers, params=params, timeout=timeout)
+        r.raise_for_status()
+        try:
+            return r.json()
+        except Exception:
+            return r.text
+    except Exception as e:
+        return {"error": str(e), "url": url}
+
+def _ha_states():
+    base, headers = _ha_api_base_and_headers()
+    if not base:
+        return {"error": "ha_unavailable"}
+    return _http_get(f"{base}/states", headers=headers)
+
+def _ha_state(entity_id: str):
+    base, headers = _ha_api_base_and_headers()
+    if not base:
+        return {"error": "ha_unavailable"}
+    return _http_get(f"{base}/states/{entity_id}", headers=headers)
+
+def _ha_history(entity_id: str, start_iso: Optional[str] = None, end_iso: Optional[str] = None):
+    base, headers = _ha_api_base_and_headers()
+    if not base:
+        return {"error": "ha_unavailable"}
+    params = {"filter_entity_id": entity_id}
+    url = f"{base}/history/period/{start_iso}" if start_iso else f"{base}/history/period"
+    if end_iso:
+        params["end_time"] = end_iso
+    return _http_get(url, headers=headers, params=params, timeout=30)
+
+def _ha_search_entities(query: str, domain: Optional[str] = None):
+    data = _ha_states()
+    if isinstance(data, dict) and data.get("error"):
+        return data
+    q = (query or "").lower()
+    out = []
+    for row in data or []:
+        eid = row.get("entity_id", "")
+        attrs = row.get("attributes", {})
+        name = (attrs.get("friendly_name") or "").lower()
+        if q in eid.lower() or q in name:
+            if domain and not eid.startswith(domain + "."):
+                continue
+            out.append({
+                "entity_id": eid,
+                "state": row.get("state"),
+                "friendly_name": attrs.get("friendly_name"),
+                "device_class": attrs.get("device_class"),
+                "area_id": attrs.get("area_id"),
+                "unit_of_measurement": attrs.get("unit_of_measurement"),
+            })
+    return out[:50]
+
+# ---- LLM plumbing (OpenAI tool calling) ----
+def _openai_client():
+    from openai import OpenAI
+    return OpenAI()
+
+# Tool defs (schema-driven; model chooses what to call)
+TOOL_DEFS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_analyses",
+            "description": "List recent analysis summaries from Spectra.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type":"integer","default":50},
+                    "since": {"type":"string","description":"ISO timestamp lower bound (optional)"}
+                }
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_events",
+            "description": "List observed events saved by Spectra (door open/close, energy spikes, etc.).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "limit": {"type":"integer","default":200},
+                    "since": {"type":"string"},
+                    "entity_id": {"type":"string"},
+                    "category": {"type":"string","description":"security, energy, comfort, anomalies"}
+                }
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ha_search_entities",
+            "description": "Fuzzy search live Home Assistant entities by friendly name or id.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type":"string"},
+                    "domain": {"type":"string","description":"e.g. light, binary_sensor, climate"}
+                },
+                "required":["query"]
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ha_get_state",
+            "description": "Get current state of a Home Assistant entity.",
+            "parameters": {"type":"object","properties":{"entity_id":{"type":"string"}},"required":["entity_id"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "ha_get_history",
+            "description": "Fetch recent state history of an entity.",
+            "parameters": {
+                "type":"object",
+                "properties":{
+                    "entity_id":{"type":"string"},
+                    "start_iso":{"type":"string"},
+                    "end_iso":{"type":"string"}
+                },
+                "required":["entity_id"]
+            },
+        },
+    },
+]
+
+# Reuse your existing route functions for data (no duplicate SQL needed)
+def _tool_router(name: str, args: Dict[str, Any]):
+    if name == "get_analyses":
+        limit = int(args.get("limit") or 50)
+        since = args.get("since")
+        # call your /api/history logic directly
+        return {"rows": get_history(limit=limit)} if since is None else {"rows": get_history(limit=limit, since=since)}
+    if name == "get_events":
+        limit = int(args.get("limit") or 200)
+        since = args.get("since")
+        category = args.get("category")
+        # call your /api/events logic directly
+        return {"rows": get_events(since=since, category=category, limit=limit)}
+    if name == "ha_search_entities":
+        return {"rows": _ha_search_entities(args.get("query",""), args.get("domain"))}
+    if name == "ha_get_state":
+        return {"row": _ha_state(args.get("entity_id",""))}
+    if name == "ha_get_history":
+        return {"rows": _ha_history(args.get("entity_id",""), args.get("start_iso"), args.get("end_iso"))}
+    return {"error": f"Unknown tool {name}"}
+
+SPECTRA_SYSTEM_PROMPT = """You are Spectra, a Home Assistant copilot that can answer questions and draft automations.
+You can call tools to fetch Spectra analyses, Spectra events, and (when configured) live Home Assistant data.
+
+Rules:
+- Decide what information you need, then call tools. You may call multiple tools.
+- For timing questions (“how long has the door been open?”) fetch the entity’s current state and/or history and compute the duration.
+- For automation requests, return both an explanation and *valid* Home Assistant automation YAML under 'automation_yaml'. Use *real* entity_ids found via tools; if none found, use placeholders like 'light.living_room' and add a 'placeholders' array with suggested candidates.
+- Always return a single JSON object: {
+  "answer_md": string,
+  "entities": string[],
+  "links": [{"label":string,"url":string}][],
+  "automation_yaml"?: string,
+  "placeholders"?: string[]
+}
+Be concise and practical."""
+
+def _ensure_json_obj(text: str) -> Dict[str, Any]:
+    import re
+    s = text.strip()
+    m = re.search(r"\{[\s\S]*\}\s*$", s)
+    if m:
+        s = m.group(0)
+    try:
+        obj = json.loads(s)
+        return obj if isinstance(obj, dict) else {"answer_md": text}
+    except Exception:
+        return {"answer_md": text}
+
+@app.post("/api/ask")
+def ask_spectra(payload: Dict[str, Any]):
+    q = (payload or {}).get("q", "").strip()
+    if not q:
+        raise HTTPException(status_code=400, detail="Empty question")
+
+    client = _openai_client()
+    messages = [
+        {"role":"system","content": SPECTRA_SYSTEM_PROMPT},
+        {"role":"user","content": q},
+    ]
+
+    # Tool loop
+    for _ in range(6):
+        resp = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL","gpt-5"),
+            messages=messages,
+            tools=TOOL_DEFS,
+            tool_choice="auto",
+            temperature=0.2,
+        )
+        msg = resp.choices[0].message
+        tool_calls = getattr(msg, "tool_calls", None) or []
+        if not tool_calls:
+            return _ensure_json_obj(msg.content or "")
+
+        # Execute tools and feed results
+        for tc in tool_calls:
+            name = tc.function.name
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except Exception:
+                args = {}
+            result = _tool_router(name, args)
+            messages.append({
+                "role":"tool",
+                "tool_call_id": tc.id,
+                "name": name,
+                "content": json.dumps(result),
+            })
+        messages.append({"role":"assistant","content": None,"tool_calls": tool_calls})
+
+    return {"answer_md": "Sorry, I couldn't finish that. Please try again."}
+
+#End SPectra ASk ENd
 
 def _load_context_memos(entity_ids: list[str], category: str):
     out = []
