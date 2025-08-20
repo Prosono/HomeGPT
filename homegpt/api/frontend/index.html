@@ -131,16 +131,6 @@
         </div>
       </div>
 
-      <!-- Ask Spectra -->
-      <div class="ask-row mt-2" id="askBlock">
-        <input id="askInput" class="ask-input"
-          placeholder="Ask Spectra anything… e.g., ‘How long has the main door been open?’">
-        <button id="askSend" class="chip">Ask</button>
-      </div>
-      <div id="askResult" class="ask-result hidden">
-        
-      </div>
-
       <!-- ================================================================
            PROGRESS BAR
            ================================================================ -->
@@ -356,6 +346,16 @@
   </div>
 
 
+
+
+  <!-- ================================================================
+        Spectra Ask
+        ================================================================ -->
+  <div class="ask-row">
+    <input id="askInput" class="ask-input" placeholder="Ask Spectra anything… e.g., ‘How long has the main door been open?’">
+    <button id="askSend" class="chip">Ask</button>
+  </div>
+  <div id="askResult" class="ask-result hidden"></div>  
 
   <!-- =====================================================================
        LEGACY ALIAS BRIDGE (syncs hidden legacy IDs with new ones)

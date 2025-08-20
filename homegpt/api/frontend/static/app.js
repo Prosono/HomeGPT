@@ -1551,59 +1551,6 @@ document.addEventListener('click', (e) => {
 
 // SPECTRA ASK
 
-// --- Ask Spectra wiring ---
-function wireAsk() {
-  const input = document.getElementById("askInput");
-  const send  = document.getElementById("askSend");
-  const out   = document.getElementById("askResult");
-  if (!input || !send || !out) return;
-
-  const setBusy = (on) => { send.disabled = !!on; };
-
-  async function doAsk() {
-    const q = (input.value || "").trim();
-    if (!q) return;
-
-    setBusy(true);
-    out.classList.remove("hidden");
-    out.innerHTML = `<div class="row"><div>Asking Spectra…</div><div class="chip">⌛</div></div>`;
-
-    try {
-      const res = await fetch(api("ask"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ q })
-      });
-
-      const raw = await res.text();
-      let data;
-      try { data = JSON.parse(raw); } catch { data = { answer: raw }; }
-
-      const answer = data.answer || data.text || data.message || "(no answer)";
-      const html = linkifyHtml(window.marked ? marked.parse(answer) : answer);
-
-      // optional extras if backend returns them
-      const links = Array.isArray(data.links) ? data.links : [];
-      const linksHtml = links.length
-        ? `<div class="ask-links">${links.map(l =>
-            `<a class="chip" href="${HA.url(l.href || l)}" target="_blank" rel="noopener">${l.label || l}</a>`
-          ).join("")}</div>`
-        : "";
-
-      out.innerHTML = `${html}${linksHtml}`;
-    } catch (e) {
-      out.innerHTML = `<div class="text-red-300">Ask failed: ${e.message}</div>`;
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  send.addEventListener("click", doAsk);
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doAsk(); }
-  });
-}
-
 async function askSpectra(q) {
   const box = $("askResult");
   if (!box) return;
@@ -2309,8 +2256,6 @@ function init() {
   $("toggleMode").addEventListener("click", toggleMode);
   $("runAnalysis").addEventListener("click", runAnalysisNow);
   initFeedbackManager();
-
-  wireAsk();
 
   // 🔧 Fallback click for unresolved device chips
   if (!window._deviceChipHandlerBound) {
