@@ -615,10 +615,12 @@ dialog:not([open]) { display: none !important; }
    Heatmap Glow-Up
    =========================== */
 
-/* Layout: heatmap left, controls right (stack on mobile) */
+/* =========================================================
+   Heatmap: layout (grid left, compact controls right)
+   ========================================================= */
 .heat-wrap {
   display: grid;
-  grid-template-columns: 1fr 320px;
+  grid-template-columns: 1fr 320px; /* map | controls */
   gap: 16px;
   align-items: start;
 }
@@ -626,7 +628,9 @@ dialog:not([open]) { display: none !important; }
   .heat-wrap { grid-template-columns: 1fr; }
 }
 
-/* Glass card for the heatmap itself */
+/* =========================================================
+   Heatmap card
+   ========================================================= */
 .heat-card {
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -635,21 +639,40 @@ dialog:not([open]) { display: none !important; }
   box-shadow: 0 10px 24px rgba(0,0,0,.35);
 }
 
-/* Controls panel (glass) */
+/* Footer under the heat grid: legend (left) + range (right) */
+.heat-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+@media (max-width: 640px) {
+  .heat-footer { flex-direction: column; align-items: flex-start; gap: 8px; }
+}
+
+/* Compact Range block */
+.hc-range { display: flex; align-items: center; gap: 10px; }
+.hc-range .hc-title { margin: 0; font-weight: 800; font-size: .9rem; opacity: .9; }
+
+/* =========================================================
+   Controls panel (right) — compact
+   ========================================================= */
 .glass {
   border: 1px solid var(--border);
   border-radius: 16px;
-  padding: 14px;
+  padding: 12px; /* smaller than before */
   background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
   box-shadow: 0 8px 20px rgba(0,0,0,.30);
 }
-.heat-controls { display: grid; gap: 14px; }
+.heat-controls { display: grid; gap: 12px; }
 .hc-block { display: grid; gap: 8px; }
 .hc-title { font-weight: 800; letter-spacing: .2px; color: var(--fg); opacity: .9; }
 .hc-title .value { font-weight: 800; color: #c7d2fe; }
 
-/* Toggle group look for chips */
-.btn-toggle { display: flex; gap: 8px; }
+/* Toggle group (chips) */
+.btn-toggle { display: flex; gap: 8px; flex-wrap: wrap; }
 .btn-toggle .chip {
   background: var(--chip);
   border: 1px solid var(--border);
@@ -662,40 +685,43 @@ dialog:not([open]) { display: none !important; }
 }
 .btn-toggle .chip:hover { transform: translateY(-1px); }
 
-/* Slider styling (keep it accessible) */
+/* =========================================================
+   Slider (shorter)
+   ========================================================= */
 #hm-threshold {
   width: 100%;
-  height: 6px;
+  height: 4px;               /* was 6px */
   appearance: none;
-  background: linear-gradient(90deg,
-    rgba(99,102,241,.25),
-    rgba(236,72,153,.25)
-  );
+  background: linear-gradient(90deg, rgba(99,102,241,.25), rgba(236,72,153,.25));
   border-radius: 999px;
   outline: none;
   border: 1px solid rgba(255,255,255,.12);
 }
 #hm-threshold::-webkit-slider-thumb {
   appearance: none;
-  width: 18px; height: 18px; border-radius: 50%;
+  width: 14px; height: 14px; /* was 18x18 */
+  border-radius: 50%;
   background: radial-gradient(circle at 30% 30%, #e0e7ff, #a78bfa 60%);
   border: 2px solid rgba(255,255,255,.5);
   box-shadow: 0 4px 16px rgba(0,0,0,.35);
   cursor: pointer;
 }
 #hm-threshold::-moz-range-thumb {
-  width: 18px; height: 18px; border-radius: 50%;
+  width: 14px; height: 14px; /* was 18x18 */
+  border-radius: 50%;
   background: radial-gradient(circle at 30% 30%, #e0e7ff, #a78bfa 60%);
   border: 2px solid rgba(255,255,255,.5);
   box-shadow: 0 4px 16px rgba(0,0,0,.35);
   cursor: pointer;
 }
 
-/* Heatmap grid polish */
+/* =========================================================
+   Heatmap grid polish
+   ========================================================= */
 .heatmap {
   display: grid;
   gap: 6px;
-  padding: 6px 6px 10px;
+  padding: 6px 6px 8px; /* tighter bottom now that footer exists */
   overflow-x: auto;
 }
 .hm-label {
@@ -751,12 +777,11 @@ dialog:not([open]) { display: none !important; }
 }
 .hm-cell:hover .hm-tooltip { display: block; }
 
-/* Legend */
+/* Legend (Low→High) */
 .hm-legend {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  margin-top: 10px;
   font-size: .85rem;
   color: #94a3b8;
 }
@@ -771,7 +796,7 @@ dialog:not([open]) { display: none !important; }
 .swatch-4 { background: #224093; }
 .swatch-5 { background: #f59e0b; }
 
-/* Make cells slightly smaller on very narrow screens */
+/* Very narrow screens: slightly smaller cells */
 @media (max-width: 420px) {
   .hm-cell { width: 20px; height: 20px; border-radius: 5px; }
 }
