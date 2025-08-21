@@ -480,7 +480,10 @@ async def _fetch_history_all_entities(
 
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+>>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
 =======
 >>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
 # =========================
@@ -704,7 +707,11 @@ def ask_spectra(payload: Dict[str, Any]):
             tools=TOOL_DEFS,
             tool_choice="auto",
 <<<<<<< HEAD
+<<<<<<< HEAD
             #temperature=0.2,
+=======
+            temperature=0.2,
+>>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
 =======
             temperature=0.2,
 >>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
@@ -734,7 +741,10 @@ def ask_spectra(payload: Dict[str, Any]):
 
 #End SPectra ASk ENd
 <<<<<<< HEAD
+<<<<<<< HEAD
 >>>>>>> parent of feac034 (Revert "Update main.py")
+=======
+>>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
 =======
 >>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
 
