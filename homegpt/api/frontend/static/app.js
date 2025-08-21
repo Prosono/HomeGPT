@@ -1555,46 +1555,66 @@ document.addEventListener('click', (e) => {
 async function askSpectra(q) {
   const box = $("askResult");
   if (!box) return;
+
+  // show the loader
   box.classList.remove("hidden");
-  box.innerHTML = `<div class="ask-thinking"><span class="dot dot1"></span><span class="dot dot2"></span><span class="dot dot3"></span><span class="ask-thinking-text">Thinking…</span></div>`;
+  box.innerHTML = `
+    <div class="ask-thinking">
+      <span class="dot dot1"></span><span class="dot dot2"></span><span class="dot dot3"></span>
+      <span class="ask-thinking-text">Thinking…</span>
+    </div>`;
 
   try {
-    // IMPORTANT: leading slash!
+    // ALWAYS build paths with HA.url() under ingress
     const url = HA?.url ? HA.url("/api/ask") : "/api/ask";
-    console.log("[ask] URL:", url);
 
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      // credentials not needed for same-origin, but harmless if present
       credentials: "same-origin",
       body: JSON.stringify({ q })
     });
 
-    console.log("[ask] status:", res.status, res.statusText, "->", res.url);
+    // If the request was blocked (CORS/mixed content), fetch would have thrown already.
     const raw = await res.text();
-    let data;
-    try { data = JSON.parse(raw); }
-    catch { console.error("Non-JSON from /api/ask:", raw); throw new Error(`${res.status}: ${res.statusText}`); }
+    let data = null;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      console.error("Non-JSON from /api/ask:", raw);
+      throw new Error(raw.slice(0, 200) || `HTTP ${res.status}`);
+    }
 
     const md = window.marked?.parse(data.answer_md || "") || escapeHtml(data.answer_md || "");
     let html = `<div class="ask-answer">${md}</div>`;
+
     if (data.automation_yaml) {
-      html += `<div class="ask-yaml"><div class="row"><span class="text-sm text-gray-400">Automation YAML</span><button class="chip" id="copyYaml">Copy</button></div><pre class="ask-yaml-pre"><code>${escapeHtml(data.automation_yaml)}</code></pre></div>`;
+      html += `
+        <div class="ask-yaml">
+          <div class="row">
+            <span class="text-sm text-gray-400">Automation YAML</span>
+            <button class="chip" id="copyYaml">Copy</button>
+          </div>
+          <pre class="ask-yaml-pre"><code>${escapeHtml(data.automation_yaml)}</code></pre>
+        </div>`;
     }
     if (Array.isArray(data.links) && data.links.length) {
       html += `<div class="ask-links">${data.links.map(l =>
         `<a class="chip" target="_blank" rel="noopener" href="${HA.url(l.url || l.href || "/")}">${escapeHtml(l.label || "Open")}</a>`
       ).join(" ")}</div>`;
     }
+
     box.innerHTML = linkifyHtml(html);
-    box.querySelector("#copyYaml")?.addEventListener("click", () => navigator.clipboard.writeText(data.automation_yaml || ""));
+    box.querySelector("#copyYaml")?.addEventListener("click", () => {
+      navigator.clipboard.writeText(data.automation_yaml || "");
+    });
 
   } catch (e) {
     console.error(e);
     box.innerHTML = `<div class="ask-error">Ask failed: ${e?.message || e}</div>`;
   }
 }
-
 
 $("askSend")?.addEventListener("click", () => {
   const q = $("askInput")?.value?.trim();
