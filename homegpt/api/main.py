@@ -476,7 +476,6 @@ async def _fetch_history_all_entities(
 
     return combined
 
-# Start SPECRA ASK
 # =========================
 # Ask Spectra (LLM Orchestrator)
 # =========================
@@ -697,6 +696,7 @@ def ask_spectra(payload: Dict[str, Any]):
             messages=messages,
             tools=TOOL_DEFS,
             tool_choice="auto",
+            #temperature=0.2,
         )
         msg = resp.choices[0].message
         tool_calls = getattr(msg, "tool_calls", None) or []

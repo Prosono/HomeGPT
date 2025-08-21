@@ -1550,6 +1550,7 @@ document.addEventListener('click', (e) => {
 });
 
 // SPECTRA ASK
+// SPECTRA ASK
 
 async function askSpectra(q) {
   const box = $("askResult");
@@ -1608,6 +1609,9 @@ $("askInput")?.addEventListener("keydown", (e) => {
     if (q) askSpectra(q);
   }
 });
+
+// SPECTRA ASK END
+
 
 // SPECTRA ASK END
 
