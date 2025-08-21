@@ -1554,28 +1554,31 @@ document.addEventListener('click', (e) => {
 
 async function askSpectra(q) {
   const box = $("askResult");
-  if (!box) return;
+  const card = $("askCard");
+  const status = $("askStatus");
+  if (!box || !card || !status) return;
+
   box.classList.remove("hidden");
-  box.innerHTML = `<div class="text-sm text-gray-400">Thinking…</div>`;
+  card.classList.add("is-thinking");
+  status.innerHTML = `
+    <div class="thinking-bar" role="progressbar" aria-label="Spectra is thinking"></div>
+    <span class="sr-only">Thinking</span>
+  `;
 
   try {
     const res = await fetch(api("ask"), {
       method: "POST",
-      headers: { 
-        "Content-Type": "application/json",
-        "Accept": "application/json" 
-      },
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
       body: JSON.stringify({ q })
     });
 
-    // ✅ safer parse: read as text first, then try JSON.parse
     const raw = await res.text();
     let data = null;
     try {
       data = JSON.parse(raw);
     } catch {
       console.error("Non-JSON from /api/ask:", raw);
-      throw new Error(raw.slice(0, 200)); // short preview of error
+      throw new Error(raw.slice(0, 200));
     }
 
     const md = window.marked?.parse(data.answer_md || "") || escapeHtml(data.answer_md || "");
@@ -1597,19 +1600,21 @@ async function askSpectra(q) {
       ).join(" ")}</div>`;
     }
 
-    // turn inline entity_ids into links + add chips (uses your linkifier)
     box.innerHTML = linkifyHtml(html);
-
-    // copy button
     box.querySelector("#copyYaml")?.addEventListener("click", () => {
       navigator.clipboard.writeText(data.automation_yaml || "");
     });
 
+    status.textContent = ""; // clear status
   } catch (e) {
     console.error(e);
     box.innerHTML = `<div class="text-red-400">Ask failed: ${e.message}</div>`;
+    status.innerHTML = `<span class="dots">Retry?</span>`;
+  } finally {
+    card.classList.remove("is-thinking");
   }
 }
+
 
 $("askSend")?.addEventListener("click", () => {
   const q = $("askInput").value.trim();
