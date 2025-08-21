@@ -151,21 +151,13 @@
         <!-- ================================================================
         Spectra Ask
         ================================================================ -->
-      <div class="ask-card card" id="askCard">
-        <div class="ask-row">
-          <input id="askInput" class="ask-input" placeholder="Ask Spectra about your home…">
-          <button id="askSend" class="btn">Ask</button>
-        </div>
-
-        <!-- subtle status line with animation -->
-        <div class="ask-status" id="askStatus" aria-live="polite" aria-atomic="true"></div>
-
-        <!-- reply container -->
-        <div id="askResult" class="ask-result hidden" aria-live="polite"></div>
+      <div class="ask-row">
+        <input id="askInput" class="ask-input" placeholder="Ask Spectra anything… e.g., ‘How long has the main door been open?’">
+        <button id="askSend" class="chip">Ask</button>
       </div>
+      <div id="askResult" class="ask-result hidden"></div> 
 
-
-
+      
       <!-- ================================================================
            EVENTS (last 24h)
            ================================================================ -->
