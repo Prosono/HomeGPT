@@ -477,18 +477,6 @@ async def _fetch_history_all_entities(
     return combined
 
 # Start SPECRA ASK
-
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-=======
->>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
-=======
->>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
-=======
->>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
 # =========================
 # Ask Spectra (LLM Orchestrator)
 # =========================
@@ -709,19 +697,6 @@ def ask_spectra(payload: Dict[str, Any]):
             messages=messages,
             tools=TOOL_DEFS,
             tool_choice="auto",
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-            #temperature=0.2,
-=======
-            temperature=0.2,
->>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
-=======
-            temperature=0.2,
->>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
-=======
-            temperature=0.2,
->>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
         )
         msg = resp.choices[0].message
         tool_calls = getattr(msg, "tool_calls", None) or []
@@ -747,16 +722,6 @@ def ask_spectra(payload: Dict[str, Any]):
     return {"answer_md": "Sorry, I couldn't finish that. Please try again."}
 
 #End SPectra ASk ENd
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
->>>>>>> parent of feac034 (Revert "Update main.py")
-=======
->>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
-=======
->>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
-=======
->>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
 
 def _load_context_memos(entity_ids: list[str], category: str):
     out = []
