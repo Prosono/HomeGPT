@@ -633,20 +633,37 @@ def _tool_router(name: str, args: Dict[str, Any]):
     if name == "get_analyses":
         limit = int(args.get("limit") or 50)
         since = args.get("since")
-        # call your /api/history logic directly
-        return {"rows": get_history(limit=limit)} if since is None else {"rows": get_history(limit=limit, since=since)}
+        # use the existing /api/history handler output
+        rows = history()
+        if since:
+            # normalize 'since' like your endpoints do
+            try:
+                s = since.replace("Z", "+00:00")
+                dt = datetime.fromisoformat(s)
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+                since = dt.isoformat(timespec="seconds")
+            except Exception:
+                since = None
+            if since:
+                rows = [r for r in rows if (r.get("ts") or "") >= since]
+        return {"rows": rows[:limit]}
+
     if name == "get_events":
         limit = int(args.get("limit") or 200)
         since = args.get("since")
         category = args.get("category")
-        # call your /api/events logic directly
-        return {"rows": get_events(since=since, category=category, limit=limit)}
+        return {"rows": get_events(since=since, category=category, limit=limit)}  # your existing route fn
+
     if name == "ha_search_entities":
         return {"rows": _ha_search_entities(args.get("query",""), args.get("domain"))}
+
     if name == "ha_get_state":
         return {"row": _ha_state(args.get("entity_id",""))}
+
     if name == "ha_get_history":
         return {"rows": _ha_history(args.get("entity_id",""), args.get("start_iso"), args.get("end_iso"))}
+
     return {"error": f"Unknown tool {name}"}
 
 SPECTRA_SYSTEM_PROMPT = """You are Spectra, a Home Assistant copilot that can answer questions and draft automations.
