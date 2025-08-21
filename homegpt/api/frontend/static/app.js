@@ -1554,36 +1554,31 @@ document.addEventListener('click', (e) => {
 
 async function askSpectra(q) {
   const box = $("askResult");
-  if (!box) return;
+  const card = $("askCard");
+  const status = $("askStatus");
+  if (!box || !card || !status) return;
 
-  // show the loader
   box.classList.remove("hidden");
-  box.innerHTML = `
-    <div class="ask-thinking">
-      <span class="dot dot1"></span><span class="dot dot2"></span><span class="dot dot3"></span>
-      <span class="ask-thinking-text">Thinking…</span>
-    </div>`;
+  card.classList.add("is-thinking");
+  status.innerHTML = `
+    <div class="thinking-bar" role="progressbar" aria-label="Spectra is thinking"></div>
+    <span class="sr-only">Thinking</span>
+  `;
 
   try {
-    // ALWAYS build paths with HA.url() under ingress
-    const url = HA?.url ? HA.url("/api/ask") : "/api/ask";
-
-    const res = await fetch(url, {
+    const res = await fetch(api("ask"), {
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      // credentials not needed for same-origin, but harmless if present
-      credentials: "same-origin",
       body: JSON.stringify({ q })
     });
 
-    // If the request was blocked (CORS/mixed content), fetch would have thrown already.
     const raw = await res.text();
     let data = null;
     try {
       data = JSON.parse(raw);
     } catch {
       console.error("Non-JSON from /api/ask:", raw);
-      throw new Error(raw.slice(0, 200) || `HTTP ${res.status}`);
+      throw new Error(raw.slice(0, 200));
     }
 
     const md = window.marked?.parse(data.answer_md || "") || escapeHtml(data.answer_md || "");
@@ -1591,14 +1586,14 @@ async function askSpectra(q) {
 
     if (data.automation_yaml) {
       html += `
-        <div class="ask-yaml">
-          <div class="row">
-            <span class="text-sm text-gray-400">Automation YAML</span>
+        <div class="mt-3">
+          <div class="row"><span class="text-sm text-gray-400">Automation YAML</span>
             <button class="chip" id="copyYaml">Copy</button>
           </div>
-          <pre class="ask-yaml-pre"><code>${escapeHtml(data.automation_yaml)}</code></pre>
+          <pre><code>${escapeHtml(data.automation_yaml)}</code></pre>
         </div>`;
     }
+
     if (Array.isArray(data.links) && data.links.length) {
       html += `<div class="ask-links">${data.links.map(l =>
         `<a class="chip" target="_blank" rel="noopener" href="${HA.url(l.url || l.href || "/")}">${escapeHtml(l.label || "Open")}</a>`
@@ -1610,14 +1605,19 @@ async function askSpectra(q) {
       navigator.clipboard.writeText(data.automation_yaml || "");
     });
 
+    status.textContent = ""; // clear status
   } catch (e) {
     console.error(e);
-    box.innerHTML = `<div class="ask-error">Ask failed: ${e?.message || e}</div>`;
+    box.innerHTML = `<div class="text-red-400">Ask failed: ${e.message}</div>`;
+    status.innerHTML = `<span class="dots">Retry?</span>`;
+  } finally {
+    card.classList.remove("is-thinking");
   }
 }
 
+
 $("askSend")?.addEventListener("click", () => {
-  const q = $("askInput")?.value?.trim();
+  const q = $("askInput").value.trim();
   if (q) askSpectra(q);
 });
 $("askInput")?.addEventListener("keydown", (e) => {
@@ -1627,7 +1627,6 @@ $("askInput")?.addEventListener("keydown", (e) => {
     if (q) askSpectra(q);
   }
 });
-
 
 // SPECTRA ASK END
 
