@@ -616,20 +616,17 @@ dialog:not([open]) { display: none !important; }
    =========================== */
 
 /* =========================================================
-   Heatmap: layout (grid left, compact controls right)
+   Heatmap layout — controls UNDER the map (single column)
    ========================================================= */
 .heat-wrap {
   display: grid;
-  grid-template-columns: 1fr 320px; /* map | controls */
-  gap: 16px;
+  grid-template-columns: 1fr;   /* always a single column */
+  gap: 14px;
   align-items: start;
-}
-@media (max-width: 980px) {
-  .heat-wrap { grid-template-columns: 1fr; }
 }
 
 /* =========================================================
-   Heatmap card
+   Heatmap card + footer (legend + range)
    ========================================================= */
 .heat-card {
   border: 1px solid var(--border);
@@ -639,48 +636,47 @@ dialog:not([open]) { display: none !important; }
   box-shadow: 0 10px 24px rgba(0,0,0,.35);
 }
 
-/* Footer under the heat grid:
-   legend on its own row, range on its own row beneath it */
 .heat-footer {
   display: flex;
-  flex-direction: column;       /* <-- force vertical stack */
-  align-items: flex-start;      /* left align */
+  flex-direction: column;    /* legend row, then range row */
+  align-items: flex-start;
   gap: 8px;
   margin-top: 10px;
 }
-@media (max-width: 640px) {
-  .heat-footer { gap: 6px; }
-}
 
-/* Compact Range block */
-.hc-range {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.hc-range .hc-title {
-  margin: 0;
-  font-weight: 800;
-  font-size: .9rem;
-  opacity: .9;
-}
+.hc-range { display: flex; align-items: center; gap: 10px; }
+.hc-range .hc-title { margin: 0; font-weight: 800; font-size: .9rem; opacity: .9; }
 
 /* =========================================================
-   Controls panel (right) — compact
+   Controls panel (now a compact bar UNDER the map)
    ========================================================= */
-.glass {
+.heat-controls.glass {
+  width: 100%;
   border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 12px; /* smaller */
+  border-radius: 14px;
+  padding: 10px 12px;                  /* tighter */
   background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,.03));
-  box-shadow: 0 8px 20px rgba(0,0,0,.30);
+  box-shadow: 0 8px 20px rgba(0,0,0,.28);
+  display: grid;
+  gap: 10px;
 }
-.heat-controls { display: grid; gap: 12px; }
-.hc-block { display: grid; gap: 8px; }
+
+/* First block (severity) on a single row: label+value | slider */
+.heat-controls .hc-block:first-child {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  align-items: center;
+  gap: 12px;
+}
+.heat-controls .hc-block:first-child .hc-title { grid-column: 1; }
+.heat-controls .hc-block:first-child #hm-threshold { grid-column: 2; }
+
+/* Second block (filters) */
+.hc-block + .hc-block { margin-top: 0; }
 .hc-title { font-weight: 800; letter-spacing: .2px; color: var(--fg); opacity: .9; }
 .hc-title .value { font-weight: 800; color: #c7d2fe; }
 
-/* Toggle group (chips) */
+/* Toggle chips */
 .btn-toggle { display: flex; gap: 8px; flex-wrap: wrap; }
 .btn-toggle .chip {
   background: var(--chip);
@@ -695,26 +691,18 @@ dialog:not([open]) { display: none !important; }
 .btn-toggle .chip:hover { transform: translateY(-1px); }
 
 /* =========================================================
-   Slider (shorter)
+   Slider (short & tidy)
    ========================================================= */
 #hm-threshold {
   width: 100%;
-  height: 4px;               /* shorter */
+  height: 4px;
   appearance: none;
   background: linear-gradient(90deg, rgba(99,102,241,.25), rgba(236,72,153,.25));
   border-radius: 999px;
   outline: none;
   border: 1px solid rgba(255,255,255,.12);
 }
-#hm-threshold::-webkit-slider-thumb {
-  appearance: none;
-  width: 14px; height: 14px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 30% 30%, #e0e7ff, #a78bfa 60%);
-  border: 2px solid rgba(255,255,255,.5);
-  box-shadow: 0 4px 16px rgba(0,0,0,.35);
-  cursor: pointer;
-}
+#hm-threshold::-webkit-slider-thumb,
 #hm-threshold::-moz-range-thumb {
   width: 14px; height: 14px;
   border-radius: 50%;
@@ -722,6 +710,7 @@ dialog:not([open]) { display: none !important; }
   border: 2px solid rgba(255,255,255,.5);
   box-shadow: 0 4px 16px rgba(0,0,0,.35);
   cursor: pointer;
+  appearance: none;
 }
 
 /* =========================================================
@@ -730,31 +719,33 @@ dialog:not([open]) { display: none !important; }
 .heatmap {
   display: grid;
   gap: 6px;
-  padding: 6px 6px 8px;  /* tighter bottom now that footer exists */
-  overflow-x: auto;      /* <-- allow horizontal scroll */
-  min-width: 100%;       /* fill the card when few columns */
-  width: max-content;    /* grow to fit all cells so it can scroll */
+  padding: 6px 6px 8px;
+  overflow-x: auto;           /* enable scrolling when many hours */
+  min-width: 100%;
+  width: max-content;         /* expand to content width to allow scroll */
+  -webkit-overflow-scrolling: touch;
 }
+
+/* optional: if your JS sets --hm-cols = hour count */
+.heatmap {
+  grid-template-columns: max-content repeat(var(--hm-cols, 24), 24px);
+}
+
 .hm-label {
-  position: sticky;
-  left: 0;
-  z-index: 1;
+  position: sticky; left: 0; z-index: 1;
   background: rgba(17,24,39,.5);
   backdrop-filter: blur(2px);
   padding: 0 8px 0 6px;
-  font-size: .82rem;
-  color: #cbd5e1;
-  border-radius: 6px;
+  font-size: .82rem; color: #cbd5e1; border-radius: 6px;
 }
 
-/* Cells with subtle inner glow + nicer hover */
+/* Cells */
 .hm-cell {
   width: 24px; height: 24px;
   border-radius: 6px;
   background: #0f172a;
   outline: 1px solid rgba(255,255,255,0.06);
-  position: relative;
-  cursor: pointer;
+  position: relative; cursor: pointer;
   transition: transform .08s ease, box-shadow .12s ease, outline-color .12s ease;
   box-shadow: inset 0 0 0 1px rgba(255,255,255,.03);
 }
@@ -766,41 +757,28 @@ dialog:not([open]) { display: none !important; }
 
 /* Tooltip */
 .hm-tooltip {
-  position: absolute;
-  top: -8px; left: 50%;
+  position: absolute; top: -8px; left: 50%;
   transform: translate(-50%, -100%);
-  background: rgba(15, 23, 42, .98);
-  color: #e5e7eb;
-  padding: 6px 8px;
-  font-size: 11px;
-  border-radius: 6px;
-  pointer-events: none;
-  display: none;
-  box-shadow: 0 6px 18px rgba(0,0,0,.35);
-  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(15, 23, 42, .98); color: #e5e7eb;
+  padding: 6px 8px; font-size: 11px; border-radius: 6px;
+  pointer-events: none; display: none;
+  box-shadow: 0 6px 18px rgba(0,0,0,.35); border: 1px solid rgba(255,255,255,.08);
   max-width: 28rem;
 }
 .hm-tooltip::after {
-  content: "";
-  position: absolute;
-  bottom: -5px; left: 50%;
-  transform: translateX(-50%);
-  border: 6px solid transparent;
+  content: ""; position: absolute; bottom: -5px; left: 50%;
+  transform: translateX(-50%); border: 6px solid transparent;
   border-top-color: rgba(15,23,42,.98);
 }
 .hm-cell:hover .hm-tooltip { display: block; }
 
-/* Legend (Low→High) */
+/* Legend */
 .hm-legend {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: .85rem;
-  color: #94a3b8;
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: .85rem; color: #94a3b8;
 }
 .hm-swatch {
-  display: inline-block;
-  width: 22px; height: 10px; border-radius: 6px;
+  display: inline-block; width: 22px; height: 10px; border-radius: 6px;
   border: 1px solid rgba(255,255,255,.12);
 }
 .swatch-1 { background: #0b1a3a; }
@@ -809,10 +787,11 @@ dialog:not([open]) { display: none !important; }
 .swatch-4 { background: #224093; }
 .swatch-5 { background: #f59e0b; }
 
-/* Very narrow screens: slightly smaller cells */
+/* Small screens: smaller cells */
 @media (max-width: 420px) {
   .hm-cell { width: 20px; height: 20px; border-radius: 5px; }
 }
+
 
 
 /* ==========================================================================
