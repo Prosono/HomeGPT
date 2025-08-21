@@ -15,33 +15,37 @@ This version introduces these improvements:
 
 4) Topology context is fetched automatically and included in passive runs.
 """
-import os
-from zoneinfo import ZoneInfo
+# ── Standard Library ────────────────────────────────────────────────────────────
 import asyncio
 import json
 import logging
-from pathlib import Path
 import math
-from typing import Iterable
-from datetime import datetime, timezone
-from statistics import mean
-from typing import Any
+import os
 import re
-from pydantic import BaseModel
-from fastapi import HTTPException
-from typing import Optional
-from pydantic import BaseModel
-from fastapi import Query
-from typing import Optional, List
-from fastapi import Body
-from fastapi import Path as PathParam
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from statistics import mean
+from typing import Any, Dict, Iterable, List, Optional
 
+from zoneinfo import ZoneInfo
+
+# ── Third-Party ────────────────────────────────────────────────────────────────
+import requests
 import yaml
-from fastapi import FastAPI, Query, Body
+from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from datetime import datetime, timezone, timedelta
+from pydantic import BaseModel
+
+from typing import Optional, Dict, Any
+import json, time, os
+import requests
+from fastapi import HTTPException
+
+# ── First-Party / Local (project imports go here) ──────────────────────────────
+# from . import something
 
 from homegpt.app.topology import (
     fetch_topology_snapshot,
@@ -472,9 +476,13 @@ async def _fetch_history_all_entities(
 
     return combined
 
+# Start SPECRA ASK
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
+=======
+>>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
 # =========================
 # Ask Spectra (LLM Orchestrator)
 # =========================
@@ -695,7 +703,11 @@ def ask_spectra(payload: Dict[str, Any]):
             messages=messages,
             tools=TOOL_DEFS,
             tool_choice="auto",
+<<<<<<< HEAD
             #temperature=0.2,
+=======
+            temperature=0.2,
+>>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
         )
         msg = resp.choices[0].message
         tool_calls = getattr(msg, "tool_calls", None) or []
@@ -721,7 +733,10 @@ def ask_spectra(payload: Dict[str, Any]):
     return {"answer_md": "Sorry, I couldn't finish that. Please try again."}
 
 #End SPectra ASk ENd
+<<<<<<< HEAD
 >>>>>>> parent of feac034 (Revert "Update main.py")
+=======
+>>>>>>> parent of ae41bb2 (Revert "Aks Spectra implementation")
 
 def _load_context_memos(entity_ids: list[str], category: str):
     out = []
