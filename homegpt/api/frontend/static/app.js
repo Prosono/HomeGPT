@@ -1561,10 +1561,22 @@ async function askSpectra(q) {
   try {
     const res = await fetch(api("ask"), {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { 
+        "Content-Type": "application/json",
+        "Accept": "application/json" 
+      },
       body: JSON.stringify({ q })
     });
-    const data = await res.json();
+
+    // ✅ safer parse: read as text first, then try JSON.parse
+    const raw = await res.text();
+    let data = null;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      console.error("Non-JSON from /api/ask:", raw);
+      throw new Error(raw.slice(0, 200)); // short preview of error
+    }
 
     const md = window.marked?.parse(data.answer_md || "") || escapeHtml(data.answer_md || "");
     let html = `<div class="ask-answer">${md}</div>`;
@@ -1578,6 +1590,7 @@ async function askSpectra(q) {
           <pre><code>${escapeHtml(data.automation_yaml)}</code></pre>
         </div>`;
     }
+
     if (Array.isArray(data.links) && data.links.length) {
       html += `<div class="ask-links">${data.links.map(l =>
         `<a class="chip" target="_blank" rel="noopener" href="${HA.url(l.url || l.href || "/")}">${escapeHtml(l.label || "Open")}</a>`

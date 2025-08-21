@@ -685,25 +685,33 @@ def ask_spectra(payload: Dict[str, Any]):
 
     client = _openai_client()
     messages = [
-        {"role":"system","content": SPECTRA_SYSTEM_PROMPT},
-        {"role":"user","content": q},
+        {"role": "system", "content": SPECTRA_SYSTEM_PROMPT},
+        {"role": "user", "content": q},
     ]
 
-    # Tool loop
     for _ in range(6):
         resp = client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL","gpt-5"),
+            model=os.getenv("OPENAI_MODEL", "gpt-5"),
             messages=messages,
             tools=TOOL_DEFS,
             tool_choice="auto",
-            #temperature=0.2,
+            # temperature must be default (1) for this model
         )
         msg = resp.choices[0].message
-        tool_calls = getattr(msg, "tool_calls", None) or []
+        tool_calls = (getattr(msg, "tool_calls", None) or [])
+
+        # If the model answered directly, return that (ensure it’s a JSON object)
         if not tool_calls:
             return _ensure_json_obj(msg.content or "")
 
-        # Execute tools and feed results
+        # ✅ IMPORTANT: record the assistant tool_calls message FIRST
+        messages.append({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": tool_calls,
+        })
+
+        # Then execute each tool and append tool messages
         for tc in tool_calls:
             name = tc.function.name
             try:
@@ -712,12 +720,11 @@ def ask_spectra(payload: Dict[str, Any]):
                 args = {}
             result = _tool_router(name, args)
             messages.append({
-                "role":"tool",
+                "role": "tool",
                 "tool_call_id": tc.id,
                 "name": name,
                 "content": json.dumps(result),
             })
-        messages.append({"role":"assistant","content": None,"tool_calls": tool_calls})
 
     return {"answer_md": "Sorry, I couldn't finish that. Please try again."}
 
