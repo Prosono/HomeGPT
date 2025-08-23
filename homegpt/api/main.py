@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import mean
 from typing import Any, Dict, Iterable, List, Optional
-from openai import RateLimitError, APIError
+from openai import RateLimitError, APIError, BadRequestError
 from zoneinfo import ZoneInfo
 
 # ── Third-Party ────────────────────────────────────────────────────────────────
@@ -948,11 +948,9 @@ def ask_spectra(payload: Dict[str, Any]):
                 messages=messages,
                 tools=TOOL_DEFS,
                 tool_choice="auto",
-                # keep outputs small to avoid hitting TPM/context limits again
                 max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "600")),
             )
         except RateLimitError:
-            # Return a compact, UI-friendly JSON object instead of 500
             return {
                 "answer_md": (
                     "Spectra hit a model rate/size limit while answering. "
@@ -962,25 +960,24 @@ def ask_spectra(payload: Dict[str, Any]):
                 "links": [],
                 "placeholders": []
             }
+        except BadRequestError as e:
+            # Surface the concrete message so it’s obvious what to fix
+            raise HTTPException(status_code=400, detail=f"Bad request to model: {getattr(e, 'message', str(e))}")
         except APIError as e:
-            # Surface other OpenAI errors as a 502 to the UI
             raise HTTPException(status_code=502, detail=f"LLM error: {getattr(e, 'message', str(e))}")
 
         msg = resp.choices[0].message
         tool_calls = (getattr(msg, "tool_calls", None) or [])
 
-        # If the model answered directly, return that (ensure it’s a JSON object)
         if not tool_calls:
             return _ensure_json_obj(msg.content or "")
 
-        # ✅ IMPORTANT: record the assistant tool_calls message FIRST
         messages.append({
             "role": "assistant",
             "content": None,
             "tool_calls": tool_calls,
         })
 
-        # Then execute each tool and append tool messages
         for tc in tool_calls:
             name = tc.function.name
             try:
@@ -989,15 +986,14 @@ def ask_spectra(payload: Dict[str, Any]):
                 args = {}
             result = _tool_router(name, args)
 
-            # ↓↓↓ clamp tool content so we never exceed token budget
             if name == "ha_snapshot" and isinstance(result, dict):
                 result = _shrink_snapshot_for_llm(result)
             tool_content = _clamp_tool_json_for_llm(result)
 
+            # IMPORTANT: do NOT include "name" in a tool message
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
-                "name": name,
                 "content": tool_content,
             })
 
