@@ -63,6 +63,14 @@ _NOISE_LINES = re.compile(
     re.IGNORECASE,
 )
 
+# =========================
+# HA Registry Snapshot (cached)
+# =========================
+_SNAPSHOT_CACHE: dict[str, Any] | None = None
+_SNAPSHOT_TS: float | None = None
+_SNAPSHOT_TTL_SEC = 60  # tweak to taste
+
+
 TOPO_MAX_CHARS    = 4000   # ≈1000 tokens
 STATE_MAX_CHARS   = 6000   # ≈1500 tokens
 HISTORY_MAX_CHARS = 9000   # ≈2250 tokens
@@ -297,6 +305,131 @@ def _get_local_tz() -> ZoneInfo:
     except Exception:
         _LOCAL_TZ = ZoneInfo("UTC")
     return _LOCAL_TZ
+
+
+def _ha_get_json(path: str, *, timeout=20):
+    base, headers = _ha_api_base_and_headers()
+    if not base:
+        raise HTTPException(500, "Home Assistant API not configured")
+    url = f"{base}{path}" if path.startswith("/") else f"{base}/{path}"
+    r = requests.get(url, headers=headers, timeout=timeout)
+    r.raise_for_status()
+    return r.json()
+
+
+def _ha_snapshot_fresh() -> dict:
+    """
+    One shot pull of HA topology + states.
+    Returns:
+      {
+        areas, floors, devices, entities, states,
+        automations, scripts, helpers, scenes, persons, zones
+      }
+    """
+    # Newer HA exposes these registry endpoints:
+    areas    = _ha_get_json("/areas")
+    floors   = _ha_get_json("/floors")
+    devices  = _ha_get_json("/devices")
+    entities = _ha_get_json("/entities")
+    states   = _ha_get_json("/states")
+
+    def _by_domain(dom: str):
+        pref = dom + "."
+        return [
+            {"entity_id": s["entity_id"], "state": s.get("state"), "attributes": s.get("attributes", {})}
+            for s in states if s.get("entity_id","").startswith(pref)
+        ]
+
+    automations = _by_domain("automation")
+    scripts     = _by_domain("script")
+    scenes      = _by_domain("scene")
+    persons     = _by_domain("person")
+    zones       = _by_domain("zone")
+
+    helpers = {
+        "input_boolean":  _by_domain("input_boolean"),
+        "input_number":   _by_domain("input_number"),
+        "input_text":     _by_domain("input_text"),
+        "input_datetime": _by_domain("input_datetime"),
+        "input_select":   _by_domain("input_select"),
+        "timer":          _by_domain("timer"),
+        "counter":        _by_domain("counter"),
+        "schedule":       _by_domain("schedule"),
+    }
+    helpers = {k: v for k, v in helpers.items() if v}
+
+    # quick indexes for name lookups
+    area_by_id  = {a["area_id"]: a for a in areas}
+    floor_by_id = {f["floor_id"]: f for f in floors}
+    device_by_id = {d["id"]: d for d in devices}
+
+    # enrich entities with area + floor (via device→area→floor where possible)
+    enriched_entities = []
+    for e in entities:
+        dev_id = e.get("device_id")
+        area_id = e.get("area_id")
+        if not area_id and dev_id and dev_id in device_by_id:
+            area_id = device_by_id[dev_id].get("area_id")
+        area_name = floor_name = None
+        if area_id and area_id in area_by_id:
+            area_name = area_by_id[area_id].get("name")
+            floor_id = area_by_id[area_id].get("floor_id")
+            if floor_id and floor_id in floor_by_id:
+                floor_name = floor_by_id[floor_id].get("name")
+
+        enriched_entities.append({
+            "entity_id": e.get("entity_id"),
+            "device_id": dev_id,
+            "area_id": area_id,
+            "area_name": area_name,
+            "floor_name": floor_name,
+            "original_name": e.get("original_name"),
+            "name": e.get("name"),
+            "platform": e.get("platform"),
+            "capabilities": e.get("capabilities"),
+        })
+
+    return {
+        "ts": datetime.utcnow().isoformat() + "Z",
+        "areas": areas,
+        "floors": floors,
+        "devices": devices,
+        "entities": enriched_entities,
+        "states": [
+            {"entity_id": s.get("entity_id"), "state": s.get("state"), "attributes": s.get("attributes", {})}
+            for s in states
+        ],
+        "automations": automations,
+        "scripts": scripts,
+        "helpers": helpers,
+        "scenes": scenes,
+        "persons": persons,
+        "zones": zones,
+        "counts": {
+            "areas": len(areas),
+            "floors": len(floors),
+            "devices": len(devices),
+            "entities": len(entities),
+            "states": len(states),
+            "automations": len(automations),
+            "scripts": len(scripts),
+            "helpers_types": len(helpers),
+            "scenes": len(scenes),
+            "persons": len(persons),
+            "zones": len(zones),
+        }
+    }
+
+def _ha_snapshot_cached(force: bool=False) -> dict:
+    global _SNAPSHOT_CACHE, _SNAPSHOT_TS
+    now = time.time()
+    if (not force) and _SNAPSHOT_CACHE and _SNAPSHOT_TS and now - _SNAPSHOT_TS < _SNAPSHOT_TTL_SEC:
+        return _SNAPSHOT_CACHE
+    data = _ha_snapshot_fresh()
+    _SNAPSHOT_CACHE, _SNAPSHOT_TS = data, now
+    return data
+
+
 
 def _ts_to_local_iso(ts_val) -> str | None:
     """Parse a DB timestamp (naive or tz-aware), treat naive as UTC, return ISO with local offset (+hh:mm)."""
@@ -602,6 +735,15 @@ TOOL_DEFS = [
             },
         },
     },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "ha_snapshot",
+            "description": "Get Home Assistant areas, floors, devices, entities, states, automations, scripts, helpers, scenes, persons, zones (cached).",
+            "parameters": {"type":"object","properties":{}}
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -626,7 +768,29 @@ TOOL_DEFS = [
             },
         },
     },
+    
 ]
+
+def pack_snapshot_for_prompt(max_areas: int = 12) -> str:
+    try:
+        snap = _ha_snapshot_cached()
+    except Exception:
+        return ""
+    counts = snap.get("counts", {})
+    area_names = [a.get("name") for a in snap.get("areas", []) if a.get("name")]
+    floor_names = [f.get("name") for f in snap.get("floors", []) if f.get("name")]
+    lines = [
+        "TOPOLOGY (registry snapshot):",
+        f"- Areas: {counts.get('areas',0)}  Floors: {counts.get('floors',0)}",
+        f"- Devices: {counts.get('devices',0)}  Entities: {counts.get('entities',0)}",
+        f"- Automations: {counts.get('automations',0)}  Scripts: {counts.get('scripts',0)}  Scenes: {counts.get('scenes',0)}",
+        f"- Helpers: {sum(len(v) for v in snap.get('helpers',{}).values())} across {len(snap.get('helpers',{}))} types",
+    ]
+    if area_names:
+        lines.append("- Area names: " + ", ".join(area_names[:max_areas]) + ("…" if len(area_names) > max_areas else ""))
+    if floor_names:
+        lines.append("- Floors: " + ", ".join(floor_names))
+    return "\n".join(lines)
 
 # Reuse your existing route functions for data (no duplicate SQL needed)
 def _tool_router(name: str, args: Dict[str, Any]):
@@ -641,6 +805,8 @@ def _tool_router(name: str, args: Dict[str, Any]):
         category = args.get("category")
         # call your /api/events logic directly
         return {"rows": get_events(since=since, category=category, limit=limit)}
+    if name == "ha_snapshot":
+        return _ha_snapshot_cached()        
     if name == "ha_search_entities":
         return {"rows": _ha_search_entities(args.get("query",""), args.get("domain"))}
     if name == "ha_get_state":
@@ -806,6 +972,36 @@ def _save_feedback_generic(payload: dict):
         c.commit()
     return {"ok": True}
 
+
+def _ha_search_entities(query: str, domain: Optional[str] = None):
+    snap = _ha_snapshot_cached()
+    entities = snap.get("entities", [])
+    states = {s["entity_id"]: s for s in snap.get("states", [])}
+    q = (query or "").lower().strip()
+    out = []
+    for e in entities:
+        eid = e.get("entity_id") or ""
+        if domain and not eid.startswith(domain + "."):
+            continue
+        name = (e.get("name") or e.get("original_name") or "").lower()
+        if q in eid.lower() or (q and q in name):
+            st = states.get(eid, {})
+            out.append({
+                "entity_id": eid,
+                "state": st.get("state"),
+                "friendly_name": st.get("attributes", {}).get("friendly_name") or e.get("name") or e.get("original_name"),
+                "device_class": st.get("attributes", {}).get("device_class"),
+                "unit_of_measurement": st.get("attributes", {}).get("unit_of_measurement"),
+                "area_id": e.get("area_id"),
+                "area_name": e.get("area_name"),
+                "floor_name": e.get("floor_name"),
+            })
+    # also allow empty query to dump first N
+    if not q:
+        out = out[:200]
+    return out[:200]
+
+
 ##----------- COMPRESION start ---------------------------
 
 
@@ -891,30 +1087,66 @@ def compose_user_prompt(
     events_block: str = "",
     context_block: str = "",
 ) -> str:
-    topo          = clamp_chars(strip_noise(topo), TOPO_MAX_CHARS)
-    state_block   = clamp_chars(strip_noise(state_block), STATE_MAX_CHARS)
-    history_block = clamp_chars(history_block, HISTORY_MAX_CHARS)
-    events_block  = clamp_chars(events_block, EVENTS_MAX_CHARS) if events_block else ""
-    context_block = clamp_chars(context_block, CONTEXT_MAX_CHARS) if context_block else ""
+    """
+    Build the final user prompt with consistent section headers and size guards.
+    Order: USER CONTEXT → TOPOLOGY → CURRENT STATE → HISTORY → EVENTS
+    """
+    # Normalize + clamp each section first (so headers aren't counted against per-section budgets)
+    def _norm(s: str) -> str:
+        return strip_noise(s or "").strip()
 
+    topo          = clamp_chars(_norm(topo),          TOPO_MAX_CHARS)
+    state_block   = clamp_chars(_norm(state_block),   STATE_MAX_CHARS)
+    history_block = clamp_chars(_norm(history_block), HISTORY_MAX_CHARS)
+    events_block  = clamp_chars(_norm(events_block),  EVENTS_MAX_CHARS)  if events_block  else ""
+    context_block = clamp_chars(_norm(context_block), CONTEXT_MAX_CHARS) if context_block else ""
+
+    # Header with concise guidance + hours hint when available
+    hrs_txt = f" Last window: {hours}h." if hours is not None else ""
     header = (
         f"Language: {lang}.\n"
         "Use CURRENT STATE as ground truth. Be concise and actionable.\n"
-        "If USER CONTEXT MEMOS conflict with weak/ambiguous signals, prefer the memos.\n\n"
+        "If USER CONTEXT MEMOS conflict with weak/ambiguous signals, prefer the memos."
+        f"{hrs_txt}\n\n"
     )
 
-    # Order: context (if any) → topology → state → history → events
-    body_parts = []
-    if context_block:
-        body_parts.append("USER CONTEXT MEMOS (from prior feedback):\n" + context_block)
-    body_parts.append(topo)
-    body_parts.append(state_block)
-    body_parts.append(history_block)
-    if events_block:
-        body_parts.append("EVENTS:\n" + events_block)
+    # Assemble sections (skip empties)
+    sections: list[str] = []
 
-    body = "\n\n".join(body_parts)
+    if context_block:
+        sections.append("### USER CONTEXT MEMOS (from prior feedback)\n" + context_block)
+
+    if topo:
+        # `topo` may already include snapshot/topology text—keep a single heading.
+        if not topo.lstrip().startswith(("### ", "TOPOLOGY", "TOPOLOGY (", "USER CONTEXT")):
+            sections.append("### TOPOLOGY\n" + topo)
+        else:
+            sections.append(topo)
+
+    if state_block:
+        if not state_block.lstrip().startswith(("### ", "CURRENT STATE")):
+            sections.append("### CURRENT STATE\n" + state_block)
+        else:
+            sections.append(state_block)
+
+    if history_block:
+        title = f"### HISTORY (compressed{f', last {hours}h' if hours is not None else ''})"
+        if not history_block.lstrip().startswith("### "):
+            sections.append(title + "\n" + history_block)
+        else:
+            sections.append(history_block)
+
+    if events_block:
+        if not events_block.lstrip().startswith(("### ", "EVENTS")):
+            sections.append("### EVENTS\n" + events_block)
+        else:
+            sections.append(events_block)
+
+    body = "\n\n".join([s for s in sections if s.strip()])
+
+    # Final global clamp (keeps whole prompt under TOTAL_MAX_CHARS)
     return clamp_chars(header + body, TOTAL_MAX_CHARS)
+
 
 
 def _parse_iso_aware(s: str) -> datetime:
@@ -1319,6 +1551,20 @@ async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
 #    except Exception as e:
 #        logger.exception("Error in /api/feedback: %s", e)
 #        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/ha/snapshot")
+def ha_snapshot():
+    try:
+        return _ha_snapshot_cached(force=False)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"HA snapshot failed: {e}")
+
+@app.post("/api/ha/snapshot/refresh")
+def ha_snapshot_refresh():
+    try:
+        return _ha_snapshot_cached(force=True)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"HA snapshot refresh failed: {e}")
 
 @app.get("/api/feedbacks")
 def list_feedbacks(
