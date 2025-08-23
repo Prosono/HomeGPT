@@ -13,6 +13,17 @@ _LOGGER = logging.getLogger("homegpt.ha")
 SUPERVISOR_TOKEN = os.environ.get("SUPERVISOR_TOKEN")
 BASE_HTTP = os.environ.get("SUPERVISOR_API", "http://supervisor/core/api")
 WS_URL = "ws://supervisor/core/websocket"
+# --- at top of file (near other consts) ---
+# Allow configuring the WS max message size (in MiB). None disables the limit.
+_WS_MAX_MIB = os.environ.get("HA_WS_MAX_MIB")
+if _WS_MAX_MIB is not None:
+    try:
+        WS_MAX_SIZE = int(_WS_MAX_MIB) * 1024 * 1024
+    except Exception:
+        WS_MAX_SIZE = None
+else:
+    # Disable the limit by default; HA can send large registry payloads.
+    WS_MAX_SIZE = None  # websockets default is 1 MiB; None = unlimited
 
 
 class HAClient:
@@ -103,7 +114,14 @@ class HAClient:
     async def _ws_once(self, req_type: str, payload: dict | None = None):
         """Open a short-lived WS, send a single request, return its .result."""
         req_id = self._next_id()
-        async with websockets.connect(WS_URL, open_timeout=10, close_timeout=5) as ws:
+        async with websockets.connect(
+            WS_URL,
+            open_timeout=10,
+            close_timeout=5,
+            max_size=WS_MAX_SIZE,        # <<< important
+            ping_interval=30,
+            ping_timeout=20,
+        ) as ws:
             await self._ws_auth(ws)
             body = {"id": req_id, "type": req_type}
             if payload:
@@ -142,15 +160,20 @@ class HAClient:
         """
         while True:
             try:
-                async with websockets.connect(WS_URL, open_timeout=10, close_timeout=5) as ws:
+                async with websockets.connect(
+                    WS_URL,
+                    open_timeout=10,
+                    close_timeout=5,
+                    max_size=WS_MAX_SIZE,    # <<< important
+                    ping_interval=30,
+                    ping_timeout=20,
+                ) as ws:
                     await self._ws_auth(ws)
-                    # subscribe
-                    await ws.send(
-                        json.dumps(
-                            {"id": self._next_id(), "type": "subscribe_events", "event_type": "state_changed"}
-                        )
-                    )
-                    # ack
+                    await ws.send(json.dumps({
+                        "id": self._next_id(),
+                        "type": "subscribe_events",
+                        "event_type": "state_changed"
+                    }))
                     ack = json.loads(await ws.recv())
                     if not ack.get("success", False):
                         raise RuntimeError(f"subscribe_events failed: {ack}")
