@@ -307,38 +307,103 @@ def _get_local_tz() -> ZoneInfo:
     return _LOCAL_TZ
 
 
-def _ha_get_json(path: str, *, timeout=20):
+# --- REST helper: return None on 404 so callers can degrade gracefully
+def _ha_get_json(path: str, *, timeout: int = 15):
     base, headers = _ha_api_base_and_headers()
     if not base:
-        raise HTTPException(500, "Home Assistant API not configured")
-    url = f"{base}{path}" if path.startswith("/") else f"{base}/{path}"
-    r = requests.get(url, headers=headers, timeout=timeout)
-    r.raise_for_status()
-    return r.json()
+        return None
+    url = f"{base}{path}"
+    try:
+        r = requests.get(url, headers=headers, timeout=timeout)
+        if r.status_code == 404:
+            # HA doesn't expose this path via REST (e.g. /areas); use WS later.
+            return None
+        r.raise_for_status()
+        try:
+            return r.json()
+        except Exception:
+            return r.text
+    except Exception as e:
+        # Log-and-forgive so callers can continue with partial data
+        logger.warning("HA GET %s failed: %s", path, e)
+        return None
 
+# --- Lightweight cache (unchanged signature that your tool router already calls)
+_SNAPSHOT_CACHE: dict[str, Any] | None = None
+_SNAPSHOT_TS: float | None = None
+_SNAPSHOT_TTL_SEC = 15.0
 
 def _ha_snapshot_fresh() -> dict:
     """
-    One shot pull of HA topology + states.
+    One-shot pull of HA topology + states with WS-backed registries.
     Returns:
       {
         areas, floors, devices, entities, states,
-        automations, scripts, helpers, scenes, persons, zones
+        automations, scripts, helpers, scenes, persons, zones, counts, ts
       }
     """
-    # Newer HA exposes these registry endpoints:
-    areas    = _ha_get_json("/areas")
-    floors   = _ha_get_json("/floors")
-    devices  = _ha_get_json("/devices")
-    entities = _ha_get_json("/entities")
-    states   = _ha_get_json("/states")
+    # ---------- REST bits (always exist) ----------
+    def _safe_get(path: str, default):
+        v = _ha_get_json(path)
+        return v if isinstance(v, (list, dict)) else default
 
+    states  = _safe_get("/states",  [])
+    config  = _safe_get("/config",  {})
+    events  = _safe_get("/events",  [])
+    # (services is sometimes useful; keep but unused in the return)
+    _       = _safe_get("/services", [])
+
+    # ---------- WS registries (areas/floors/devices/entities) ----------
+    areas, floors, devices, entities = [], [], [], []
+    if HAVE_REAL:
+        async def _fetch_regs():
+            ha = HAClient()
+            try:
+                # Each returns a list of dicts on success
+                a = await ha.ws_call({"type": "config/area_registry/list"})
+                f = await ha.ws_call({"type": "config/floor_registry/list"})
+                d = await ha.ws_call({"type": "config/device_registry/list"})
+                e = await ha.ws_call({"type": "config/entity_registry/list"})
+                return a or [], f or [], d or [], e or []
+            except Exception as e:
+                logger.warning("WS registry fetch failed; falling back to empties: %s", e)
+                return [], [], [], []
+            finally:
+                try:
+                    await ha.close()
+                except Exception:
+                    pass
+
+        try:
+            # /api/ask runs in a threadpool (no running loop) → safe to asyncio.run()
+            areas, floors, devices, entities = asyncio.run(_fetch_regs())
+        except RuntimeError:
+            # If we ever get called from inside an event loop, use a temp loop
+            try:
+                loop = asyncio.new_event_loop()
+                try:
+                    areas, floors, devices, entities = loop.run_until_complete(_fetch_regs())
+                finally:
+                    loop.close()
+            except Exception as e:
+                logger.warning("WS registry fetch (alt loop) failed: %s", e)
+                areas = floors = devices = entities = []
+    # else: no HA client → leave registries empty
+
+    # ---------- Domain bucketing from states ----------
     def _by_domain(dom: str):
         pref = dom + "."
-        return [
-            {"entity_id": s["entity_id"], "state": s.get("state"), "attributes": s.get("attributes", {})}
-            for s in states if s.get("entity_id","").startswith(pref)
-        ]
+        out = []
+        for s in states:
+            eid = s.get("entity_id", "")
+            if not eid.startswith(pref):
+                continue
+            out.append({
+                "entity_id":  eid,
+                "state":      s.get("state"),
+                "attributes": s.get("attributes", {}),
+            })
+        return out
 
     automations = _by_domain("automation")
     scripts     = _by_domain("script")
@@ -356,20 +421,17 @@ def _ha_snapshot_fresh() -> dict:
         "counter":        _by_domain("counter"),
         "schedule":       _by_domain("schedule"),
     }
-    helpers = {k: v for k, v in helpers.items() if v}
+    helpers = {k: v for k, v in helpers.items() if v}  # drop empty types
 
-    # quick indexes for name lookups
-    area_by_id  = {a["area_id"]: a for a in areas}
-    floor_by_id = {f["floor_id"]: f for f in floors}
-    device_by_id = {d["id"]: d for d in devices}
+    # ---------- Enrich entities with area/floor via device ----------
+    area_by_id   = {a.get("area_id"): a for a in areas if a.get("area_id")}
+    floor_by_id  = {f.get("floor_id"): f for f in floors if f.get("floor_id")}
+    device_by_id = {d.get("id"): d for d in devices if d.get("id")}
 
-    # enrich entities with area + floor (via device→area→floor where possible)
     enriched_entities = []
     for e in entities:
-        dev_id = e.get("device_id")
-        area_id = e.get("area_id")
-        if not area_id and dev_id and dev_id in device_by_id:
-            area_id = device_by_id[dev_id].get("area_id")
+        dev_id  = e.get("device_id")
+        area_id = e.get("area_id") or (device_by_id.get(dev_id, {}) or {}).get("area_id")
         area_name = floor_name = None
         if area_id and area_id in area_by_id:
             area_name = area_by_id[area_id].get("name")
@@ -378,27 +440,31 @@ def _ha_snapshot_fresh() -> dict:
                 floor_name = floor_by_id[floor_id].get("name")
 
         enriched_entities.append({
-            "entity_id": e.get("entity_id"),
-            "device_id": dev_id,
-            "area_id": area_id,
-            "area_name": area_name,
-            "floor_name": floor_name,
+            "entity_id":     e.get("entity_id"),
+            "device_id":     dev_id,
+            "area_id":       area_id,
+            "area_name":     area_name,
+            "floor_name":    floor_name,
             "original_name": e.get("original_name"),
-            "name": e.get("name"),
-            "platform": e.get("platform"),
-            "capabilities": e.get("capabilities"),
+            "name":          e.get("name"),
+            "platform":      e.get("platform"),
+            "capabilities":  e.get("capabilities"),
         })
 
+    # ---------- Normalize states for return ----------
+    norm_states = [
+        {"entity_id": s.get("entity_id"), "state": s.get("state"), "attributes": s.get("attributes", {})}
+        for s in states
+    ]
+
+    # ---------- Final payload ----------
     return {
         "ts": datetime.utcnow().isoformat() + "Z",
         "areas": areas,
         "floors": floors,
         "devices": devices,
         "entities": enriched_entities,
-        "states": [
-            {"entity_id": s.get("entity_id"), "state": s.get("state"), "attributes": s.get("attributes", {})}
-            for s in states
-        ],
+        "states": norm_states,
         "automations": automations,
         "scripts": scripts,
         "helpers": helpers,
@@ -409,21 +475,25 @@ def _ha_snapshot_fresh() -> dict:
             "areas": len(areas),
             "floors": len(floors),
             "devices": len(devices),
-            "entities": len(entities),
-            "states": len(states),
+            "entities": len(enriched_entities),
+            "states": len(norm_states),
             "automations": len(automations),
             "scripts": len(scripts),
             "helpers_types": len(helpers),
             "scenes": len(scenes),
             "persons": len(persons),
             "zones": len(zones),
-        }
+        },
+        # include a few bits that can be handy for LLM prompts/debug
+        "config": config,
+        "events_catalog": events,
     }
 
-def _ha_snapshot_cached(force: bool=False) -> dict:
+
+def _ha_snapshot_cached() -> dict:
     global _SNAPSHOT_CACHE, _SNAPSHOT_TS
     now = time.time()
-    if (not force) and _SNAPSHOT_CACHE and _SNAPSHOT_TS and now - _SNAPSHOT_TS < _SNAPSHOT_TTL_SEC:
+    if _SNAPSHOT_CACHE and _SNAPSHOT_TS and (now - _SNAPSHOT_TS) < _SNAPSHOT_TTL_SEC:
         return _SNAPSHOT_CACHE
     data = _ha_snapshot_fresh()
     _SNAPSHOT_CACHE, _SNAPSHOT_TS = data, now

@@ -120,6 +120,21 @@ class HAClient:
                     raise RuntimeError(f"WS call {req_type} failed: {msg}")
                 return msg.get("result")
 
+# --- add this just under _ws_once --------------------------------------------
+    async def ws_call(self, payload: dict, *, timeout: float = 15.0):
+        """
+        Generic one-shot WS RPC used by main.py.
+        Accepts the full payload (must include 'type'), returns the `.result`.
+        """
+        if not isinstance(payload, dict):
+            raise ValueError("ws_call payload must be a dict")
+        req_type = payload.get("type")
+        if not req_type:
+            raise ValueError("ws_call payload must include 'type'")
+        # pass the rest of the keys as payload to _ws_once
+        body = {k: v for k, v in payload.items() if k != "type"}
+        return await self._ws_once(req_type=req_type, payload=body)
+
     async def websocket_events(self):
         """
         Async generator yielding Home Assistant state_changed events.
@@ -157,6 +172,9 @@ class HAClient:
     async def list_areas(self) -> list[dict]:
         return await self._ws_once("config/area_registry/list")
 
+    async def list_floors(self) -> list[dict]:
+        return await self._ws_once("config/floor_registry/list")        
+
     async def list_devices(self) -> list[dict]:
         return await self._ws_once("config/device_registry/list")
 
@@ -164,11 +182,11 @@ class HAClient:
         return await self._ws_once("config/entity_registry/list")
 
     async def list_registries(self) -> dict:
-        """Fetch areas, devices, entities concurrently."""
-        areas, devices, entities = await asyncio.gather(
-            self.list_areas(), self.list_devices(), self.list_entities()
+        """Fetch areas, floors, devices, entities concurrently."""
+        areas, floors, devices, entities = await asyncio.gather(
+            self.list_areas(), self.list_floors(), self.list_devices(), self.list_entities()
         )
-        return {"areas": areas, "devices": devices, "entities": entities}
+        return {"areas": areas, "floors": floors, "devices": devices, "entities": entities}
 
     # ---------------- History & Statistics ----------------
 
