@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import mean
 from typing import Any, Dict, Iterable, List, Optional
-
+from openai import RateLimitError, APIError
 from zoneinfo import ZoneInfo
 
 # ── Third-Party ────────────────────────────────────────────────────────────────
@@ -70,6 +70,9 @@ _SNAPSHOT_CACHE: dict[str, Any] | None = None
 _SNAPSHOT_TS: float | None = None
 _SNAPSHOT_TTL_SEC = 60  # tweak to taste
 
+# ---- LLM payload compaction guards ----
+OPENAI_MAX_TOOL_CHARS = int(os.getenv("OPENAI_MAX_TOOL_CHARS", "24000"))  # per tool message
+OPENAI_MAX_MESSAGES_CHARS = int(os.getenv("OPENAI_MAX_MESSAGES_CHARS", "80000"))  # total safety
 
 TOPO_MAX_CHARS    = 4000   # ≈1000 tokens
 STATE_MAX_CHARS   = 6000   # ≈1500 tokens
@@ -809,6 +812,15 @@ TOOL_DEFS = [
     {
         "type": "function",
         "function": {
+            "name": "ha_snapshot_brief",
+            "description": "Small, LLM-safe snapshot: counts + sample of areas/floors/entities/states/helpers/automations/scripts/scenes/persons/zones.",
+            "parameters": {"type":"object","properties":{}}
+        },
+    },    
+
+    {
+        "type": "function",
+        "function": {
             "name": "ha_snapshot",
             "description": "Get Home Assistant areas, floors, devices, entities, states, automations, scripts, helpers, scenes, persons, zones (cached).",
             "parameters": {"type":"object","properties":{}}
@@ -876,7 +888,11 @@ def _tool_router(name: str, args: Dict[str, Any]):
         # call your /api/events logic directly
         return {"rows": get_events(since=since, category=category, limit=limit)}
     if name == "ha_snapshot":
-        return _ha_snapshot_cached()        
+        return _ha_snapshot_cached()  
+    if name == "ha_snapshot_brief":
+        snap = _ha_snapshot_cached()
+        slim = _shrink_snapshot_for_llm(snap)
+        return slim              
     if name == "ha_search_entities":
         return {"rows": _ha_search_entities(args.get("query",""), args.get("domain"))}
     if name == "ha_get_state":
@@ -926,13 +942,30 @@ def ask_spectra(payload: Dict[str, Any]):
     ]
 
     for _ in range(6):
-        resp = client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "gpt-5"),
-            messages=messages,
-            tools=TOOL_DEFS,
-            tool_choice="auto",
-            # temperature must be default (1) for this model
-        )
+        try:
+            resp = client.chat.completions.create(
+                model=os.getenv("OPENAI_MODEL", "gpt-5"),
+                messages=messages,
+                tools=TOOL_DEFS,
+                tool_choice="auto",
+                # keep outputs small to avoid hitting TPM/context limits again
+                max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "600")),
+            )
+        except RateLimitError:
+            # Return a compact, UI-friendly JSON object instead of 500
+            return {
+                "answer_md": (
+                    "Spectra hit a model rate/size limit while answering. "
+                    "I trimmed tool data — please try again or ask a narrower question."
+                ),
+                "entities": [],
+                "links": [],
+                "placeholders": []
+            }
+        except APIError as e:
+            # Surface other OpenAI errors as a 502 to the UI
+            raise HTTPException(status_code=502, detail=f"LLM error: {getattr(e, 'message', str(e))}")
+
         msg = resp.choices[0].message
         tool_calls = (getattr(msg, "tool_calls", None) or [])
 
@@ -955,12 +988,32 @@ def ask_spectra(payload: Dict[str, Any]):
             except Exception:
                 args = {}
             result = _tool_router(name, args)
+
+            # ↓↓↓ clamp tool content so we never exceed token budget
+            if name == "ha_snapshot" and isinstance(result, dict):
+                result = _shrink_snapshot_for_llm(result)
+            tool_content = _clamp_tool_json_for_llm(result)
+
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
                 "name": name,
-                "content": json.dumps(result),
+                "content": tool_content,
             })
+
+        # Optional: keep a rough global cap on message history size
+        joined = "".join((m.get("content") or "") for m in messages if isinstance(m, dict))
+        if len(joined) > OPENAI_MAX_MESSAGES_CHARS:
+            # trim earlier tool messages (keep the last few)
+            trimmed = []
+            kept_tool = 0
+            for m in reversed(messages):
+                if m.get("role") == "tool" and kept_tool < 3:
+                    trimmed.append(m)
+                    kept_tool += 1
+                elif m.get("role") != "tool":
+                    trimmed.append(m)
+            messages = list(reversed(trimmed))
 
     return {"answer_md": "Sorry, I couldn't finish that. Please try again."}
 
@@ -1217,7 +1270,126 @@ def compose_user_prompt(
     # Final global clamp (keeps whole prompt under TOTAL_MAX_CHARS)
     return clamp_chars(header + body, TOTAL_MAX_CHARS)
 
+def _truncate_list(lst, max_items):
+    if not isinstance(lst, list) or len(lst) <= max_items:
+        return lst
+    return lst[:max_items] + [{"_truncated": len(lst) - max_items}]
 
+def _truncate_str(s: str, max_len: int = 2000):
+    s = str(s)
+    return s if len(s) <= max_len else (s[:max_len] + f"... [{len(s)-max_len} more chars]")
+
+def _shrink_snapshot_for_llm(snap: dict) -> dict:
+    """
+    Keep counts and small samples; drop heavy fields or cap them.
+    This preserves enough structure for the LLM to reason without blowing token limits.
+    """
+    snap = dict(snap or {})
+    counts = snap.get("counts") or {}
+    out = {
+        "ts": snap.get("ts"),
+        "counts": counts,
+        "config": {
+            k: snap.get("config", {}).get(k)
+            for k in ("location_name", "unit_system", "version")
+            if isinstance(snap.get("config", {}), dict)
+        },
+        "areas": _truncate_list(
+            [{"area_id": a.get("area_id"), "name": a.get("name")} for a in snap.get("areas", [])],
+            30
+        ),
+        "floors": _truncate_list(
+            [{"floor_id": f.get("floor_id"), "name": f.get("name")} for f in snap.get("floors", [])],
+            20
+        ),
+        # Show a *small* sample of entities, enriched
+        "entities": _truncate_list(
+            [{
+                "entity_id": e.get("entity_id"),
+                "area_name": e.get("area_name"),
+                "floor_name": e.get("floor_name"),
+                "name": e.get("name") or e.get("original_name"),
+                "platform": e.get("platform"),
+            } for e in snap.get("entities", [])],
+            250
+        ),
+        # Show a *small* sample of live states
+        "states": _truncate_list(
+            [{
+                "entity_id": s.get("entity_id"),
+                "state": _truncate_str(s.get("state"), 64),
+                "attr": {
+                    k: (v if isinstance(v, (int, float, bool)) else _truncate_str(v, 64))
+                    for k, v in (s.get("attributes") or {}).items()
+                    if k in ("friendly_name", "device_class", "unit_of_measurement", "area_id")
+                }
+            } for s in snap.get("states", [])],
+            300
+        ),
+        # Helpers as small grouped samples
+        "helpers": {
+            k: _truncate_list(
+                [{"entity_id": r.get("entity_id"), "state": _truncate_str(r.get("state"), 64)} for r in v],
+                40
+            )
+            for k, v in (snap.get("helpers") or {}).items()
+        },
+        # Small samples for domains
+        "automations": _truncate_list([{ "entity_id": x.get("entity_id"), "state": x.get("state")} for x in snap.get("automations", [])], 100),
+        "scripts":     _truncate_list([{ "entity_id": x.get("entity_id"), "state": x.get("state")} for x in snap.get("scripts", [])], 80),
+        "scenes":      _truncate_list([{ "entity_id": x.get("entity_id")} for x in snap.get("scenes", [])], 80),
+        "persons":     _truncate_list([{ "entity_id": x.get("entity_id"), "state": x.get("state")} for x in snap.get("persons", [])], 50),
+        "zones":       _truncate_list([{ "entity_id": x.get("entity_id")} for x in snap.get("zones", [])], 50),
+    }
+    return out
+
+def _clamp_tool_json_for_llm(obj: dict | list | str, *, budget_chars: int = OPENAI_MAX_TOOL_CHARS) -> str:
+    """
+    JSON-dump with a hard char budget. If it's too long, progressively truncate
+    large arrays commonly seen in HA snapshot payloads.
+    """
+    def dump(o): return json.dumps(o, ensure_ascii=False)
+    s = dump(obj)
+    if len(s) <= budget_chars:
+        return s
+
+    # Try to shrink common heavy keys if dict
+    if isinstance(obj, dict):
+        o = dict(obj)
+        for key, cap in [
+            ("states", 200),
+            ("entities", 200),
+            ("automations", 80),
+            ("scripts", 60),
+        ]:
+            if key in o and isinstance(o[key], list):
+                o[key] = _truncate_list(o[key], cap)
+                s = dump(o)
+                if len(s) <= budget_chars:
+                    return s
+        # As last resort, drop huge fields entirely
+        for key in ("states", "entities"):
+            if key in o:
+                o[key] = [{"_omitted": True, "count": len(obj.get(key, []))}]
+                s = dump(o)
+                if len(s) <= budget_chars:
+                    return s
+        # If still too big, keep only counts + minimal pointers
+        tiny = {
+            "ts": o.get("ts"),
+            "counts": o.get("counts"),
+            "note": "payload was heavily truncated to fit token budget",
+        }
+        return dump(tiny)
+
+    # If it's a list/str: hard clamp
+    if isinstance(obj, list):
+        obj = _truncate_list(obj, 200)
+        s = dump(obj)
+        return s[:budget_chars]
+    if isinstance(obj, str):
+        return obj[:budget_chars]
+    return dump(obj)[:budget_chars]
 
 def _parse_iso_aware(s: str) -> datetime:
     # HA returns ISO like '2025-08-11T06:23:10+00:00' or without tz.
