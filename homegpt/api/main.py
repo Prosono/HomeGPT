@@ -72,7 +72,8 @@ _SNAPSHOT_TTL_SEC = 60  # tweak to taste
 
 # ---- LLM payload compaction guards ----
 OPENAI_MAX_TOOL_CHARS = int(os.getenv("OPENAI_MAX_TOOL_CHARS", "24000"))  # per tool message
-OPENAI_MAX_MESSAGES_CHARS = int(os.getenv("OPENAI_MAX_MESSAGES_CHARS", "80000"))  # total safety
+OPENAI_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "600"))
+OPENAI_MAX_MESSAGES_CHARS = int(os.getenv("OPENAI_MAX_MESSAGES_CHARS", "24000"))
 
 TOPO_MAX_CHARS    = 4000   # ≈1000 tokens
 STATE_MAX_CHARS   = 6000   # ≈1500 tokens
