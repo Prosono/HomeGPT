@@ -961,6 +961,13 @@ def _ensure_json_obj(text: str) -> Dict[str, Any]:
 
 @app.post("/api/ask")
 def ask_spectra(payload: Dict[str, Any]):
+    """
+    Orchestrates a tool-using chat round-trip with Spectra.
+    - Uses correct param (max_completion_tokens) for gpt-5.
+    - Falls back to legacy max_tokens if a different model demands it.
+    - Clamps large tool payloads to avoid TPM/size blowups.
+    - Surfaces rate/size limits as a friendly JSON object the UI can render.
+    """
     q = (payload or {}).get("q", "").strip()
     if not q:
         raise HTTPException(status_code=400, detail="Empty question")
@@ -974,15 +981,17 @@ def ask_spectra(payload: Dict[str, Any]):
     tools = _sanitize_tools(TOOL_DEFS)
 
     for _ in range(6):
+        # --- call the model (handle both gpt-5 and legacy models) ---
         try:
             resp = client.chat.completions.create(
                 model=os.getenv("OPENAI_MODEL", "gpt-5"),
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
-                max_tokens=OPENAI_MAX_OUTPUT_TOKENS,  # keep outputs small
+                max_completion_tokens=OPENAI_MAX_OUTPUT_TOKENS,  # correct for gpt-5
             )
         except RateLimitError:
+            # Friendly UI payload; don't crash the endpoint
             return {
                 "answer_md": (
                     "Spectra hit a model rate/size limit while answering. "
@@ -993,28 +1002,38 @@ def ask_spectra(payload: Dict[str, Any]):
                 "placeholders": []
             }
         except BadRequestError as e:
-            _log_bad_request(e)
-            # Surface a concise message to the UI so you can see what's wrong
-            raise HTTPException(status_code=400, detail=getattr(e, "message", str(e)))
+            # If the model doesn't support max_completion_tokens, retry once with max_tokens
+            msg_txt = (getattr(e, "message", "") or str(e)).lower()
+            if "max_completion_tokens" in msg_txt:
+                resp = client.chat.completions.create(
+                    model=os.getenv("OPENAI_MODEL", "gpt-5"),
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
+                    max_tokens=OPENAI_MAX_OUTPUT_TOKENS,  # legacy param for older models
+                )
+            else:
+                _log_bad_request(e)
+                raise HTTPException(status_code=400, detail=getattr(e, "message", str(e)))
         except APIError as e:
-            # Transient upstream issue
+            # Transient upstream failure
             raise HTTPException(status_code=502, detail=f"LLM error: {getattr(e, 'message', str(e))}")
 
         msg = resp.choices[0].message
         tool_calls = (getattr(msg, "tool_calls", None) or [])
 
-        # Direct answer with no tool calls → return normalized JSON
+        # If the model answered directly, normalize to an object and return
         if not tool_calls:
             return _ensure_json_obj(msg.content or "")
 
-        # Record the assistant tool_calls message FIRST (content must be None or "")
+        # Record assistant tool_calls first (content must be None/"")
         messages.append({
             "role": "assistant",
             "content": None,
             "tool_calls": tool_calls,
         })
 
-        # Execute each tool call and append tool messages (NO "name" field here)
+        # Execute tools and append tool messages (string content; no "name" field)
         for tc in tool_calls:
             name = tc.function.name
             try:
@@ -1024,10 +1043,10 @@ def ask_spectra(payload: Dict[str, Any]):
 
             result = _tool_router(name, args)
 
-            # Clamp large tool payloads
+            # Keep LLM budget sane
             if name == "ha_snapshot" and isinstance(result, dict):
                 result = _shrink_snapshot_for_llm(result)
-            tool_content = _clamp_tool_json_for_llm(result)  # must be a STRING
+            tool_content = _clamp_tool_json_for_llm(result)  # must be STRING
 
             messages.append({
                 "role": "tool",
@@ -1035,7 +1054,7 @@ def ask_spectra(payload: Dict[str, Any]):
                 "content": tool_content,
             })
 
-        # Optional: keep the rolling conversation small
+        # Optional rolling size guard: keep last few tool replies + all non-tool turns
         joined = "".join((m.get("content") or "") for m in messages if isinstance(m, dict))
         if len(joined) > OPENAI_MAX_MESSAGES_CHARS:
             trimmed = []
