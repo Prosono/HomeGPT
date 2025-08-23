@@ -73,7 +73,7 @@ _SNAPSHOT_TTL_SEC = 60  # tweak to taste
 # ---- LLM payload compaction guards ----
 OPENAI_MAX_TOOL_CHARS = int(os.getenv("OPENAI_MAX_TOOL_CHARS", "24000"))  # per tool message
 OPENAI_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "600"))
-OPENAI_MAX_MESSAGES_CHARS = int(os.getenv("OPENAI_MAX_MESSAGES_CHARS", "24000"))
+OPENAI_MAX_MESSAGES_CHARS = int(os.getenv("OPENAI_MAX_MSG_CHARS", "45000"))
 
 TOPO_MAX_CHARS    = 4000   # ≈1000 tokens
 STATE_MAX_CHARS   = 6000   # ≈1500 tokens
@@ -350,14 +350,96 @@ def _sanitize_tools(tools: list[dict]) -> list[dict]:
 
 
 def _log_bad_request(e: BadRequestError):
-    # Try to log the most informative bits (without crashing if fields are missing)
     try:
-        msg = getattr(e, "message", None) or str(e)
-        body = getattr(e, "body", None)
-        code = getattr(getattr(e, "error", None), "code", None)
-        logger.error("OpenAI BadRequest: %s | code=%s | body=%s", msg, code, body)
+        body = getattr(e, "body", None) or {}
+        msg = getattr(e, "message", str(e))
+        logging.getLogger("HomeGPT").warning("OpenAI BadRequest: %s | code=%s | body=%s",
+                                             msg, getattr(e, "code", None), body)
     except Exception:
-        logger.error("OpenAI BadRequest (raw): %r", e)
+        logging.getLogger("HomeGPT").warning("OpenAI BadRequest: %s", e)
+
+
+
+def _trim_messages_preserving_last_tool_block(messages: list[dict]) -> list[dict]:
+    """
+    Trim earlier history but ALWAYS keep:
+      - system + latest user
+      - the *last* assistant tool_calls message
+      - the tool messages that satisfy those calls (by tool_call_id)
+      - and the most recent final assistant message if present
+    """
+    # Quick size check
+    joined = "".join((m.get("content") or "") for m in messages if isinstance(m, dict))
+    if len(joined) <= OPENAI_MAX_MESSAGES_CHARS:
+        return messages
+
+    # Locate the last assistant tool_calls message and collect its tool_call_ids
+    last_tool_idx = None
+    last_tool_call_ids = set()
+    for i in range(len(messages) - 1, -1, -1):
+        m = messages[i]
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            last_tool_idx = i
+            for tc in (m.get("tool_calls") or []):
+                # SDK object or dict
+                tc_id = getattr(tc, "id", None) or (tc.get("id") if isinstance(tc, dict) else None)
+                if tc_id:
+                    last_tool_call_ids.add(tc_id)
+            break
+
+    # Keep the last user and everything after it, plus required tool block
+    kept = []
+    # Always keep the very first system message
+    if messages and messages[0].get("role") == "system":
+        kept.append(messages[0])
+
+    # Find the last user index
+    last_user_idx = None
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "user":
+            last_user_idx = i
+            break
+
+    # Keep from last_user_idx to end, but we’ll re-add tool block if it was earlier
+    if last_user_idx is not None:
+        kept.extend(messages[last_user_idx:])
+
+    # If the assistant tool_calls message sits before last_user, re-add it and its tools
+    if last_tool_idx is not None and (last_user_idx is None or last_tool_idx < last_user_idx):
+        kept.insert(1, messages[last_tool_idx])  # after system
+        # Now add matching tool messages that reference those ids (avoid duplicates)
+        added_ids = set()
+        for m in messages[last_tool_idx + 1:]:
+            if m.get("role") == "tool":
+                tcid = m.get("tool_call_id")
+                if tcid in last_tool_call_ids and tcid not in added_ids:
+                    kept.insert(2, m)  # keep near the tool_calls message
+                    added_ids.add(tcid)
+
+    # As a last resort, if still too big, drop earliest tool messages but never the last tool block
+    while True:
+        joined = "".join((m.get("content") or "") for m in kept if isinstance(m, dict))
+        if len(joined) <= OPENAI_MAX_MESSAGES_CHARS:
+            break
+        # drop the oldest non-system, non-user(last), non-assistant-tool_calls, non-matching-tool
+        dropped = False
+        for i, m in enumerate(kept):
+            if i == 0 and m.get("role") == "system":
+                continue
+            # Don’t drop the last user message (the first user after system at the end)
+            if last_user_idx is not None and m is messages[last_user_idx]:
+                continue
+            # Don’t drop the preserved assistant tool_calls or its tools
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                continue
+            if m.get("role") == "tool" and m.get("tool_call_id") in last_tool_call_ids:
+                continue
+            kept.pop(i)
+            dropped = True
+            break
+        if not dropped:
+            break
+    return kept
 
 
 # --- Lightweight cache (unchanged signature that your tool router already calls)
@@ -959,15 +1041,9 @@ def _ensure_json_obj(text: str) -> Dict[str, Any]:
         return {"answer_md": text}
 
 
+
 @app.post("/api/ask")
 def ask_spectra(payload: Dict[str, Any]):
-    """
-    Orchestrates a tool-using chat round-trip with Spectra.
-    - Uses correct param (max_completion_tokens) for gpt-5.
-    - Falls back to legacy max_tokens if a different model demands it.
-    - Clamps large tool payloads to avoid TPM/size blowups.
-    - Surfaces rate/size limits as a friendly JSON object the UI can render.
-    """
     q = (payload or {}).get("q", "").strip()
     if not q:
         raise HTTPException(status_code=400, detail="Empty question")
@@ -977,21 +1053,20 @@ def ask_spectra(payload: Dict[str, Any]):
         {"role": "system", "content": SPECTRA_SYSTEM_PROMPT},
         {"role": "user", "content": q},
     ]
-
     tools = _sanitize_tools(TOOL_DEFS)
 
     for _ in range(6):
-        # --- call the model (handle both gpt-5 and legacy models) ---
+        # Call model
         try:
             resp = client.chat.completions.create(
                 model=os.getenv("OPENAI_MODEL", "gpt-5"),
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
-                max_completion_tokens=OPENAI_MAX_OUTPUT_TOKENS,  # correct for gpt-5
+                # IMPORTANT for GPT-5 style endpoints:
+                max_completion_tokens=OPENAI_MAX_OUTPUT_TOKENS,
             )
         except RateLimitError:
-            # Friendly UI payload; don't crash the endpoint
             return {
                 "answer_md": (
                     "Spectra hit a model rate/size limit while answering. "
@@ -999,41 +1074,38 @@ def ask_spectra(payload: Dict[str, Any]):
                 ),
                 "entities": [],
                 "links": [],
-                "placeholders": []
+                "placeholders": [],
             }
         except BadRequestError as e:
-            # If the model doesn't support max_completion_tokens, retry once with max_tokens
-            msg_txt = (getattr(e, "message", "") or str(e)).lower()
-            if "max_completion_tokens" in msg_txt:
-                resp = client.chat.completions.create(
-                    model=os.getenv("OPENAI_MODEL", "gpt-5"),
-                    messages=messages,
-                    tools=tools,
-                    tool_choice="auto",
-                    max_tokens=OPENAI_MAX_OUTPUT_TOKENS,  # legacy param for older models
-                )
-            else:
-                _log_bad_request(e)
-                raise HTTPException(status_code=400, detail=getattr(e, "message", str(e)))
+            _log_bad_request(e)
+            raise HTTPException(status_code=400, detail=getattr(e, "message", str(e)))
         except APIError as e:
-            # Transient upstream failure
             raise HTTPException(status_code=502, detail=f"LLM error: {getattr(e, 'message', str(e))}")
 
         msg = resp.choices[0].message
         tool_calls = (getattr(msg, "tool_calls", None) or [])
 
-        # If the model answered directly, normalize to an object and return
+        # If no tools were called:
         if not tool_calls:
-            return _ensure_json_obj(msg.content or "")
+            text = (msg.content or "").strip()
+            if text:
+                return _ensure_json_obj(text)
+            # Model returned empty content — continue the loop once more to give it a nudge
+            # (We still have system+user in messages and may have prior tool context.)
+            # Add a gentle prod so it produces something:
+            messages.append({"role": "assistant", "content": ""})
+            messages.append({"role": "user", "content": "Please answer in the required JSON format."})
+            messages = _trim_messages_preserving_last_tool_block(messages)
+            continue
 
-        # Record assistant tool_calls first (content must be None/"")
+        # Record the assistant tool_calls message FIRST
         messages.append({
             "role": "assistant",
-            "content": None,
+            "content": None,  # must be None or ""
             "tool_calls": tool_calls,
         })
 
-        # Execute tools and append tool messages (string content; no "name" field)
+        # Execute each tool call and append its tool result
         for tc in tool_calls:
             name = tc.function.name
             try:
@@ -1043,30 +1115,27 @@ def ask_spectra(payload: Dict[str, Any]):
 
             result = _tool_router(name, args)
 
-            # Keep LLM budget sane
+            # Clamp big payloads
             if name == "ha_snapshot" and isinstance(result, dict):
                 result = _shrink_snapshot_for_llm(result)
-            tool_content = _clamp_tool_json_for_llm(result)  # must be STRING
+            tool_content = _clamp_tool_json_for_llm(result)
 
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
-                "content": tool_content,
+                "content": tool_content,  # MUST be a string
             })
 
-        # Optional rolling size guard: keep last few tool replies + all non-tool turns
-        joined = "".join((m.get("content") or "") for m in messages if isinstance(m, dict))
-        if len(joined) > OPENAI_MAX_MESSAGES_CHARS:
-            trimmed = []
-            kept_tool = 0
-            for m in reversed(messages):
-                if m.get("role") == "tool" and kept_tool < 3:
-                    trimmed.append(m); kept_tool += 1
-                elif m.get("role") != "tool":
-                    trimmed.append(m)
-            messages = list(reversed(trimmed))
+        # Keep the rolling conversation small but preserve the last tool block
+        messages = _trim_messages_preserving_last_tool_block(messages)
 
-    return {"answer_md": "Sorry, I couldn't finish that. Please try again."}
+    # If we exhausted attempts, return a small, non-empty fallback object
+    return {
+        "answer_md": "Sorry, I couldn’t finish that one. Try rephrasing or narrowing the question.",
+        "entities": [],
+        "links": [],
+        "placeholders": [],
+    }
 #End SPectra ASk ENd
 
 def _load_context_memos(entity_ids: list[str], category: str):
@@ -1331,28 +1400,40 @@ def _truncate_str(s: str, max_len: int = 2000):
 
 def _shrink_snapshot_for_llm(snap: dict) -> dict:
     """
-    Keep counts and small samples; drop heavy fields or cap them.
-    This preserves enough structure for the LLM to reason without blowing token limits.
+    Build a lean snapshot the model can reason over without blowing context:
+      - Keep ts, counts, a few config bits.
+      - Include small samples of areas/floors/entities/states.
+      - Include small, grouped samples for helpers and common domains.
     """
     snap = dict(snap or {})
     counts = snap.get("counts") or {}
+
+    # Safe accessors
+    def _safe_dict(d):
+        return d if isinstance(d, dict) else {}
+    def _safe_list(v):
+        return v if isinstance(v, list) else []
+
+    cfg = _safe_dict(snap.get("config"))
+
     out = {
         "ts": snap.get("ts"),
         "counts": counts,
         "config": {
-            k: snap.get("config", {}).get(k)
+            k: cfg.get(k)
             for k in ("location_name", "unit_system", "version")
-            if isinstance(snap.get("config", {}), dict)
+            if k in cfg
         },
+        # Small samples of registry data
         "areas": _truncate_list(
-            [{"area_id": a.get("area_id"), "name": a.get("name")} for a in snap.get("areas", [])],
-            30
+            [{"area_id": a.get("area_id"), "name": a.get("name")} for a in _safe_list(snap.get("areas"))],
+            30,
         ),
         "floors": _truncate_list(
-            [{"floor_id": f.get("floor_id"), "name": f.get("name")} for f in snap.get("floors", [])],
-            20
+            [{"floor_id": f.get("floor_id"), "name": f.get("name")} for f in _safe_list(snap.get("floors"))],
+            20,
         ),
-        # Show a *small* sample of entities, enriched
+        # Enriched entities (tiny view)
         "entities": _truncate_list(
             [{
                 "entity_id": e.get("entity_id"),
@@ -1360,86 +1441,175 @@ def _shrink_snapshot_for_llm(snap: dict) -> dict:
                 "floor_name": e.get("floor_name"),
                 "name": e.get("name") or e.get("original_name"),
                 "platform": e.get("platform"),
-            } for e in snap.get("entities", [])],
-            250
+            } for e in _safe_list(snap.get("entities"))],
+            220,   # slightly lower than before to help fit
         ),
-        # Show a *small* sample of live states
+        # Live states (very compact attr set)
         "states": _truncate_list(
             [{
                 "entity_id": s.get("entity_id"),
                 "state": _truncate_str(s.get("state"), 64),
                 "attr": {
                     k: (v if isinstance(v, (int, float, bool)) else _truncate_str(v, 64))
-                    for k, v in (s.get("attributes") or {}).items()
+                    for k, v in (_safe_dict(s.get("attributes"))).items()
                     if k in ("friendly_name", "device_class", "unit_of_measurement", "area_id")
-                }
-            } for s in snap.get("states", [])],
-            300
+                },
+            } for s in _safe_list(snap.get("states"))],
+            260,
         ),
-        # Helpers as small grouped samples
+        # Helpers (grouped + capped)
         "helpers": {
-            k: _truncate_list(
-                [{"entity_id": r.get("entity_id"), "state": _truncate_str(r.get("state"), 64)} for r in v],
-                40
+            hk: _truncate_list(
+                [{"entity_id": r.get("entity_id"), "state": _truncate_str(r.get("state"), 64)} for r in _safe_list(hv)],
+                36,
             )
-            for k, v in (snap.get("helpers") or {}).items()
+            for hk, hv in _safe_dict(snap.get("helpers")).items()
         },
-        # Small samples for domains
-        "automations": _truncate_list([{ "entity_id": x.get("entity_id"), "state": x.get("state")} for x in snap.get("automations", [])], 100),
-        "scripts":     _truncate_list([{ "entity_id": x.get("entity_id"), "state": x.get("state")} for x in snap.get("scripts", [])], 80),
-        "scenes":      _truncate_list([{ "entity_id": x.get("entity_id")} for x in snap.get("scenes", [])], 80),
-        "persons":     _truncate_list([{ "entity_id": x.get("entity_id"), "state": x.get("state")} for x in snap.get("persons", [])], 50),
-        "zones":       _truncate_list([{ "entity_id": x.get("entity_id")} for x in snap.get("zones", [])], 50),
+        # Domain buckets (small)
+        "automations": _truncate_list(
+            [{"entity_id": x.get("entity_id"), "state": x.get("state")} for x in _safe_list(snap.get("automations"))],
+            90,
+        ),
+        "scripts": _truncate_list(
+            [{"entity_id": x.get("entity_id"), "state": x.get("state")} for x in _safe_list(snap.get("scripts"))],
+            70,
+        ),
+        "scenes": _truncate_list(
+            [{"entity_id": x.get("entity_id")} for x in _safe_list(snap.get("scenes"))],
+            60,
+        ),
+        "persons": _truncate_list(
+            [{"entity_id": x.get("entity_id"), "state": x.get("state")} for x in _safe_list(snap.get("persons"))],
+            40,
+        ),
+        "zones": _truncate_list(
+            [{"entity_id": x.get("entity_id")} for x in _safe_list(snap.get("zones"))],
+            40,
+        ),
     }
+
     return out
 
-def _clamp_tool_json_for_llm(obj: dict | list | str, *, budget_chars: int = OPENAI_MAX_TOOL_CHARS) -> str:
+def _clamp_tool_json_for_llm(
+    obj: dict | list | str,
+    *,
+    budget_chars: int = OPENAI_MAX_TOOL_CHARS,
+) -> str:
     """
-    JSON-dump with a hard char budget. If it's too long, progressively truncate
-    large arrays commonly seen in HA snapshot payloads.
+    Dump tool output to JSON under a hard character budget.
+    Strategy (without breaking JSON):
+      1) Compact dump (no spaces). If it fits → return.
+      2) If dict → progressively cap/drop heavy fields (states/entities/etc).
+      3) If list → progressively cap length.
+      4) As a final fallback → tiny summary object that fits the budget.
+    We only slice the *final string* as an absolute last resort to guarantee
+    we always return a string under budget (the model tolerates non-JSON here).
     """
-    def dump(o): return json.dumps(o, ensure_ascii=False)
-    s = dump(obj)
+    def jd(o) -> str:
+        # Compact separators to save chars
+        return json.dumps(o, ensure_ascii=False, separators=(",", ":"))
+
+    s = jd(obj)
     if len(s) <= budget_chars:
         return s
 
-    # Try to shrink common heavy keys if dict
+    # ---- Dict path: progressively shrink known-heavy keys ----
     if isinstance(obj, dict):
-        o = dict(obj)
-        for key, cap in [
-            ("states", 200),
-            ("entities", 200),
-            ("automations", 80),
-            ("scripts", 60),
-        ]:
-            if key in o and isinstance(o[key], list):
-                o[key] = _truncate_list(o[key], cap)
-                s = dump(o)
-                if len(s) <= budget_chars:
-                    return s
-        # As last resort, drop huge fields entirely
-        for key in ("states", "entities"):
-            if key in o:
-                o[key] = [{"_omitted": True, "count": len(obj.get(key, []))}]
-                s = dump(o)
-                if len(s) <= budget_chars:
-                    return s
-        # If still too big, keep only counts + minimal pointers
-        tiny = {
-            "ts": o.get("ts"),
-            "counts": o.get("counts"),
-            "note": "payload was heavily truncated to fit token budget",
-        }
-        return dump(tiny)
+        o = dict(obj)  # shallow copy
 
-    # If it's a list/str: hard clamp
-    if isinstance(obj, list):
-        obj = _truncate_list(obj, 200)
-        s = dump(obj)
+        # 1) Cap large arrays commonly returned by HA
+        caps_primary = [
+            ("states", 300),
+            ("entities", 250),
+            ("automations", 120),
+            ("scripts", 90),
+            ("scenes", 80),
+            ("persons", 60),
+            ("zones", 60),
+        ]
+        changed = False
+        for key, cap in caps_primary:
+            if key in o and isinstance(o[key], list) and len(o[key]) > cap:
+                o[key] = _truncate_list(o[key], cap)
+                changed = True
+        if changed:
+            s = jd(o)
+            if len(s) <= budget_chars:
+                return s
+
+        # 2) Helpers: cap each helper list
+        if isinstance(o.get("helpers"), dict):
+            helpers = dict(o["helpers"])
+            any_changed = False
+            for hk, hv in list(helpers.items()):
+                if isinstance(hv, list) and len(hv) > 40:
+                    helpers[hk] = _truncate_list(hv, 40)
+                    any_changed = True
+            if any_changed:
+                o["helpers"] = helpers
+                s = jd(o)
+                if len(s) <= budget_chars:
+                    return s
+
+        # 3) Replace very heavy fields with counts-only sentinels
+        replaced = False
+        for key in ("states", "entities"):
+            if key in o and isinstance(o[key], list) and len(o[key]) > 0:
+                o[key] = [{"_omitted": True, "count": len(obj.get(key, []))}]
+                replaced = True
+        if replaced:
+            s = jd(o)
+            if len(s) <= budget_chars:
+                return s
+
+        # 4) Drop lower-importance fields if present
+        for key in ("events_catalog", "config"):
+            if key in o:
+                o.pop(key, None)
+        s = jd(o)
+        if len(s) <= budget_chars:
+            return s
+
+        # 5) Return a tiny, always-small summary preserving counts when available
+        tiny = {
+            "note": "payload truncated to fit token budget",
+            "counts": (obj.get("counts") if isinstance(obj.get("counts"), dict) else None),
+            "keys": sorted(list(obj.keys()))[:16],
+        }
+        s = jd(tiny)
+        if len(s) <= budget_chars:
+            return s
+
+        # Absolute last resort: hard slice the tiny JSON string
         return s[:budget_chars]
+
+    # ---- List path: progressively cap length ----
+    if isinstance(obj, list):
+        # Try a few descending caps
+        for cap in (200, 120, 60, 30):
+            lst = _truncate_list(obj, cap)
+            s = jd(lst)
+            if len(s) <= budget_chars:
+                return s
+        # Final tiny list
+        s = jd([{"_omitted": True, "count": len(obj)}])
+        if len(s) <= budget_chars:
+            return s
+        return s[:budget_chars]
+
+    # ---- String path: middle-ellipsize long strings (keeps start+end) ----
     if isinstance(obj, str):
-        return obj[:budget_chars]
-    return dump(obj)[:budget_chars]
+        if len(obj) <= budget_chars:
+            return obj
+        if budget_chars <= 10:
+            return obj[:budget_chars]
+        head = budget_chars // 2 - 1
+        tail = budget_chars - head - 1
+        return obj[:head] + "…" + obj[-tail:]
+
+    # Fallback (unknown type)
+    s = jd(obj)
+    return s[:budget_chars]
 
 def _parse_iso_aware(s: str) -> datetime:
     # HA returns ISO like '2025-08-11T06:23:10+00:00' or without tz.
