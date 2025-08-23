@@ -360,86 +360,66 @@ def _log_bad_request(e: BadRequestError):
 
 
 
-def _trim_messages_preserving_last_tool_block(messages: list[dict]) -> list[dict]:
+def _trim_messages_preserving_last_tool_block(messages: list[dict], keep_tool_replies: list[dict], *, max_chars: int = OPENAI_MAX_MESSAGES_CHARS) -> list[dict]:
     """
-    Trim earlier history but ALWAYS keep:
+    Trim older content but always preserve:
       - system + latest user
-      - the *last* assistant tool_calls message
-      - the tool messages that satisfy those calls (by tool_call_id)
-      - and the most recent final assistant message if present
+      - the last assistant message with tool_calls
+      - ALL of its corresponding tool replies (passed in keep_tool_replies)
     """
-    # Quick size check
-    joined = "".join((m.get("content") or "") for m in messages if isinstance(m, dict))
-    if len(joined) <= OPENAI_MAX_MESSAGES_CHARS:
+    def total_chars(msgs: list[dict]) -> int:
+        return sum(len((m.get("content") or "")) for m in msgs)
+
+    if total_chars(messages) <= max_chars:
         return messages
 
-    # Locate the last assistant tool_calls message and collect its tool_call_ids
+    # Identify tail block: last assistant with tool_calls + its replies
     last_tool_idx = None
-    last_tool_call_ids = set()
     for i in range(len(messages) - 1, -1, -1):
         m = messages[i]
         if m.get("role") == "assistant" and m.get("tool_calls"):
             last_tool_idx = i
-            for tc in (m.get("tool_calls") or []):
-                # SDK object or dict
-                tc_id = getattr(tc, "id", None) or (tc.get("id") if isinstance(tc, dict) else None)
-                if tc_id:
-                    last_tool_call_ids.add(tc_id)
             break
 
-    # Keep the last user and everything after it, plus required tool block
-    kept = []
-    # Always keep the very first system message
-    if messages and messages[0].get("role") == "system":
-        kept.append(messages[0])
+    head: list[dict] = []
+    tail: list[dict] = messages[:]  # default
 
-    # Find the last user index
-    last_user_idx = None
-    for i in range(len(messages) - 1, -1, -1):
-        if messages[i].get("role") == "user":
-            last_user_idx = i
-            break
+    if last_tool_idx is not None:
+        # Preserve from that assistant forward
+        tail = messages[last_tool_idx:]
+        # Also keep system + newest user before it
+        # Find newest user before last_tool_idx
+        newest_user = None
+        for j in range(last_tool_idx - 1, -1, -1):
+            if messages[j].get("role") == "user":
+                newest_user = messages[j]
+                break
+        system = next((m for m in messages if m.get("role") == "system"), None)
+        head = [m for m in [system, newest_user] if m]
 
-    # Keep from last_user_idx to end, but we’ll re-add tool block if it was earlier
-    if last_user_idx is not None:
-        kept.extend(messages[last_user_idx:])
+    trimmed = head + tail
+    # If still too big, drop any older tool messages in the tail except the ones in keep_tool_replies
+    if total_chars(trimmed) > max_chars:
+        preserved_ids = {m.get("tool_call_id") for m in keep_tool_replies}
+        new_tail = []
+        for m in tail:
+            if m.get("role") != "tool":
+                new_tail.append(m)
+            else:
+                # keep only tool replies that match the most recent batch
+                if m.get("tool_call_id") in preserved_ids:
+                    new_tail.append(m)
+        trimmed = head + new_tail
 
-    # If the assistant tool_calls message sits before last_user, re-add it and its tools
-    if last_tool_idx is not None and (last_user_idx is None or last_tool_idx < last_user_idx):
-        kept.insert(1, messages[last_tool_idx])  # after system
-        # Now add matching tool messages that reference those ids (avoid duplicates)
-        added_ids = set()
-        for m in messages[last_tool_idx + 1:]:
-            if m.get("role") == "tool":
-                tcid = m.get("tool_call_id")
-                if tcid in last_tool_call_ids and tcid not in added_ids:
-                    kept.insert(2, m)  # keep near the tool_calls message
-                    added_ids.add(tcid)
+    # Final hard cap (very rare): truncate earliest non-system content
+    while total_chars(trimmed) > max_chars and len(trimmed) > 3:
+        # remove the oldest non-system message
+        for idx, m in enumerate(trimmed):
+            if m.get("role") != "system":
+                del trimmed[idx]
+                break
 
-    # As a last resort, if still too big, drop earliest tool messages but never the last tool block
-    while True:
-        joined = "".join((m.get("content") or "") for m in kept if isinstance(m, dict))
-        if len(joined) <= OPENAI_MAX_MESSAGES_CHARS:
-            break
-        # drop the oldest non-system, non-user(last), non-assistant-tool_calls, non-matching-tool
-        dropped = False
-        for i, m in enumerate(kept):
-            if i == 0 and m.get("role") == "system":
-                continue
-            # Don’t drop the last user message (the first user after system at the end)
-            if last_user_idx is not None and m is messages[last_user_idx]:
-                continue
-            # Don’t drop the preserved assistant tool_calls or its tools
-            if m.get("role") == "assistant" and m.get("tool_calls"):
-                continue
-            if m.get("role") == "tool" and m.get("tool_call_id") in last_tool_call_ids:
-                continue
-            kept.pop(i)
-            dropped = True
-            break
-        if not dropped:
-            break
-    return kept
+    return trimmed
 
 
 # --- Lightweight cache (unchanged signature that your tool router already calls)
@@ -1055,15 +1035,16 @@ def ask_spectra(payload: Dict[str, Any]):
     ]
     tools = _sanitize_tools(TOOL_DEFS)
 
+    # Keep track of duplicate tool calls (name + sorted args)
+    seen_calls: set[tuple[str, str]] = set()
+
     for _ in range(6):
-        # Call model
         try:
             resp = client.chat.completions.create(
                 model=os.getenv("OPENAI_MODEL", "gpt-5"),
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
-                # IMPORTANT for GPT-5 style endpoints:
                 max_completion_tokens=OPENAI_MAX_OUTPUT_TOKENS,
             )
         except RateLimitError:
@@ -1083,29 +1064,22 @@ def ask_spectra(payload: Dict[str, Any]):
             raise HTTPException(status_code=502, detail=f"LLM error: {getattr(e, 'message', str(e))}")
 
         msg = resp.choices[0].message
-        tool_calls = (getattr(msg, "tool_calls", None) or [])
+        tool_calls = getattr(msg, "tool_calls", None) or []
 
-        # If no tools were called:
+        # Direct answer
         if not tool_calls:
             text = (msg.content or "").strip()
             if text:
                 return _ensure_json_obj(text)
-            # Model returned empty content — continue the loop once more to give it a nudge
-            # (We still have system+user in messages and may have prior tool context.)
-            # Add a gentle prod so it produces something:
-            messages.append({"role": "assistant", "content": ""})
-            messages.append({"role": "user", "content": "Please answer in the required JSON format."})
-            messages = _trim_messages_preserving_last_tool_block(messages)
+            # Empty answer: nudge once more
+            messages.append({"role": "assistant", "content": "Please answer now in the expected JSON format."})
             continue
 
         # Record the assistant tool_calls message FIRST
-        messages.append({
-            "role": "assistant",
-            "content": None,  # must be None or ""
-            "tool_calls": tool_calls,
-        })
+        messages.append({"role": "assistant", "content": None, "tool_calls": tool_calls})
 
-        # Execute each tool call and append its tool result
+        # Build ALL tool reply messages before appending any other assistant/user message
+        tool_reply_batch: list[dict] = []
         for tc in tool_calls:
             name = tc.function.name
             try:
@@ -1113,29 +1087,46 @@ def ask_spectra(payload: Dict[str, Any]):
             except Exception:
                 args = {}
 
-            result = _tool_router(name, args)
+            # De-dupe: if exact same tool+args seen, still emit a tool reply (with a note)
+            key = (name, json.dumps(args, sort_keys=True))
+            if key in seen_calls:
+                tool_reply_batch.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": json.dumps({"note": "Duplicate request; previous result provided. Please answer now."}),
+                })
+                continue
+            seen_calls.add(key)
 
-            # Clamp big payloads
-            if name == "ha_snapshot" and isinstance(result, dict):
-                result = _shrink_snapshot_for_llm(result)
-            tool_content = _clamp_tool_json_for_llm(result)
+            # Execute the tool safely; always emit a tool reply
+            try:
+                result = _tool_router(name, args)
+                if name == "ha_snapshot" and isinstance(result, dict):
+                    result = _shrink_snapshot_for_llm(result)
+                tool_content = _clamp_tool_json_for_llm(result)
+            except Exception as ex:
+                tool_content = json.dumps({"error": f"tool '{name}' failed", "detail": str(ex)})
 
-            messages.append({
+            tool_reply_batch.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
-                "content": tool_content,  # MUST be a string
+                "content": tool_content,
             })
 
-        # Keep the rolling conversation small but preserve the last tool block
-        messages = _trim_messages_preserving_last_tool_block(messages)
+        # Append all tool replies immediately after the assistant tool_calls message
+        messages.extend(tool_reply_batch)
 
-    # If we exhausted attempts, return a small, non-empty fallback object
-    return {
-        "answer_md": "Sorry, I couldn’t finish that one. Try rephrasing or narrowing the question.",
-        "entities": [],
-        "links": [],
-        "placeholders": [],
-    }
+        # Aggressive trimming that preserves the last tool_calls block + its replies
+        messages = _trim_messages_preserving_last_tool_block(messages, keep_tool_replies=tool_reply_batch)
+
+        # Small “answer now” nudge comes AFTER tool replies (never between tool_calls and tool replies)
+        messages.append({
+            "role": "assistant",
+            "content": "You now have enough data. Answer concisely without calling more tools.",
+        })
+
+    return {"answer_md": "Sorry, I couldn’t finish that one. Try rephrasing or narrowing the question."}
+
 #End SPectra ASk ENd
 
 def _load_context_memos(entity_ids: list[str], category: str):
