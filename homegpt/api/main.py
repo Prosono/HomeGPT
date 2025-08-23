@@ -331,6 +331,34 @@ def _ha_get_json(path: str, *, timeout: int = 15):
         logger.warning("HA GET %s failed: %s", path, e)
         return None
 
+
+def _sanitize_tools(tools: list[dict]) -> list[dict]:
+    """Ensure tool schemas are acceptable to Chat Completions."""
+    out = []
+    for t in tools or []:
+        f = t.get("function", {})
+        # parameters must exist and be a JSON schema object
+        params = f.get("parameters") or {"type": "object", "properties": {}}
+        if "type" not in params:
+            params["type"] = "object"
+        if "properties" not in params:
+            params["properties"] = {}
+        out.append({"type": "function", "function": {**f, "parameters": params}})
+    return out
+
+
+
+def _log_bad_request(e: BadRequestError):
+    # Try to log the most informative bits (without crashing if fields are missing)
+    try:
+        msg = getattr(e, "message", None) or str(e)
+        body = getattr(e, "body", None)
+        code = getattr(getattr(e, "error", None), "code", None)
+        logger.error("OpenAI BadRequest: %s | code=%s | body=%s", msg, code, body)
+    except Exception:
+        logger.error("OpenAI BadRequest (raw): %r", e)
+
+
 # --- Lightweight cache (unchanged signature that your tool router already calls)
 _SNAPSHOT_CACHE: dict[str, Any] | None = None
 _SNAPSHOT_TS: float | None = None
@@ -929,6 +957,7 @@ def _ensure_json_obj(text: str) -> Dict[str, Any]:
     except Exception:
         return {"answer_md": text}
 
+
 @app.post("/api/ask")
 def ask_spectra(payload: Dict[str, Any]):
     q = (payload or {}).get("q", "").strip()
@@ -936,19 +965,21 @@ def ask_spectra(payload: Dict[str, Any]):
         raise HTTPException(status_code=400, detail="Empty question")
 
     client = _openai_client()
-    messages = [
+    messages: list[dict] = [
         {"role": "system", "content": SPECTRA_SYSTEM_PROMPT},
         {"role": "user", "content": q},
     ]
+
+    tools = _sanitize_tools(TOOL_DEFS)
 
     for _ in range(6):
         try:
             resp = client.chat.completions.create(
                 model=os.getenv("OPENAI_MODEL", "gpt-5"),
                 messages=messages,
-                tools=TOOL_DEFS,
+                tools=tools,
                 tool_choice="auto",
-                max_tokens=int(os.getenv("OPENAI_MAX_TOKENS", "600")),
+                max_tokens=OPENAI_MAX_OUTPUT_TOKENS,  # keep outputs small
             )
         except RateLimitError:
             return {
@@ -961,58 +992,61 @@ def ask_spectra(payload: Dict[str, Any]):
                 "placeholders": []
             }
         except BadRequestError as e:
-            # Surface the concrete message so it’s obvious what to fix
-            raise HTTPException(status_code=400, detail=f"Bad request to model: {getattr(e, 'message', str(e))}")
+            _log_bad_request(e)
+            # Surface a concise message to the UI so you can see what's wrong
+            raise HTTPException(status_code=400, detail=getattr(e, "message", str(e)))
         except APIError as e:
+            # Transient upstream issue
             raise HTTPException(status_code=502, detail=f"LLM error: {getattr(e, 'message', str(e))}")
 
         msg = resp.choices[0].message
         tool_calls = (getattr(msg, "tool_calls", None) or [])
 
+        # Direct answer with no tool calls → return normalized JSON
         if not tool_calls:
             return _ensure_json_obj(msg.content or "")
 
+        # Record the assistant tool_calls message FIRST (content must be None or "")
         messages.append({
             "role": "assistant",
             "content": None,
             "tool_calls": tool_calls,
         })
 
+        # Execute each tool call and append tool messages (NO "name" field here)
         for tc in tool_calls:
             name = tc.function.name
             try:
                 args = json.loads(tc.function.arguments or "{}")
             except Exception:
                 args = {}
+
             result = _tool_router(name, args)
 
+            # Clamp large tool payloads
             if name == "ha_snapshot" and isinstance(result, dict):
                 result = _shrink_snapshot_for_llm(result)
-            tool_content = _clamp_tool_json_for_llm(result)
+            tool_content = _clamp_tool_json_for_llm(result)  # must be a STRING
 
-            # IMPORTANT: do NOT include "name" in a tool message
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
                 "content": tool_content,
             })
 
-        # Optional: keep a rough global cap on message history size
+        # Optional: keep the rolling conversation small
         joined = "".join((m.get("content") or "") for m in messages if isinstance(m, dict))
         if len(joined) > OPENAI_MAX_MESSAGES_CHARS:
-            # trim earlier tool messages (keep the last few)
             trimmed = []
             kept_tool = 0
             for m in reversed(messages):
                 if m.get("role") == "tool" and kept_tool < 3:
-                    trimmed.append(m)
-                    kept_tool += 1
+                    trimmed.append(m); kept_tool += 1
                 elif m.get("role") != "tool":
                     trimmed.append(m)
             messages = list(reversed(trimmed))
 
     return {"answer_md": "Sorry, I couldn't finish that. Please try again."}
-
 #End SPectra ASk ENd
 
 def _load_context_memos(entity_ids: list[str], category: str):
