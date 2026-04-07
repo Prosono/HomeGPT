@@ -3,6 +3,8 @@ name: Build & Push (GHCR)
 on:
   push:
     branches: [ main ]
+    tags:
+      - "v*"
   workflow_dispatch:
 
 jobs:
@@ -28,6 +30,16 @@ jobs:
       - name: Lowercase owner
         id: owner
         run: echo "lower=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Read add-on version
+        id: version
+        run: |
+          version="$(sed -n 's/^version: "\(.*\)"/\1/p' config.yaml)"
+          if [ -z "$version" ]; then
+            echo "Failed to read version from config.yaml" >&2
+            exit 1
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
 
       # 👇 Cache Docker layers
       - name: Cache Docker layers
@@ -57,5 +69,5 @@ jobs:
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache,mode=max
           tags: |
-            ghcr.io/${{ steps.owner.outputs.lower }}/homegpt:0.1.1
+            ghcr.io/${{ steps.owner.outputs.lower }}/homegpt:${{ steps.version.outputs.value }}
             ghcr.io/${{ steps.owner.outputs.lower }}/homegpt:latest
