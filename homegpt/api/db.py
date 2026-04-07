@@ -1,13 +1,12 @@
-# db.py
-from pathlib import Path
 import sqlite3
 from datetime import datetime
 
-DB_PATH = Path("/data/homegpt.db")
+from homegpt.app.config import get_db_path
 
 def _conn():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return sqlite3.connect(DB_PATH.as_posix(), check_same_thread=False)
+    db_path = get_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return sqlite3.connect(db_path.as_posix(), check_same_thread=False)
 
 def init_db():
     with _conn() as c:

@@ -65,7 +65,13 @@ class OpenAIClient:
       • empty-output recovery (retry / optional fallback)
     """
 
-    def __init__(self, model: Optional[str] = None, timeout: float = None, max_retries: int = None):
+    def __init__(
+        self,
+        model: Optional[str] = None,
+        timeout: float = None,
+        max_retries: int = None,
+        api_key: Optional[str] = None,
+    ):
         self.model = _pick_model(model)
 
         # Env-tunable defaults
@@ -82,11 +88,11 @@ class OpenAIClient:
         env_temp = os.getenv("OPENAI_TEMPERATURE")
         self.temperature: Optional[float] = float(env_temp) if (env_temp is not None and _model_allows_temperature(self.model)) else None
 
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+        if not self.api_key:
             raise RuntimeError("OPENAI_API_KEY is not set")
         # Disable SDK auto-retries; we handle retries ourselves
-        self._client = OpenAI(api_key=api_key, timeout=self.timeout, max_retries=0)
+        self._client = OpenAI(api_key=self.api_key, timeout=self.timeout, max_retries=0)
 
         self._token_param_name = _token_param_for_model(self.model)
 
@@ -135,25 +141,21 @@ class OpenAIClient:
         compatibility fallbacks.
         """
         last_err: Optional[Exception] = None
+        active_model = self.model
+        active_token_param = self._token_param_name
 
-        # Base kwargs (mutable across retries)
         kwargs: Dict[str, Any] = {
-            "model": self.model,
+            "model": active_model,
             "messages": messages,
             "timeout": self.timeout,
         }
-        # Token cap under the correct name
-        kwargs[self._token_param_name] = self.max_output_tokens
+        kwargs[active_token_param] = self.max_output_tokens
 
-        # Response format:
-        #  • JSON mode uses json_object
-        #  • Text mode asks explicitly for "text" (some models ignore, we’ll drop it on 400)
         if force_json:
             kwargs["response_format"] = {"type": "json_object"}
         else:
             kwargs["response_format"] = {"type": "text"}
 
-        # Temperature (omit for GPT-5)
         if self.temperature is not None:
             kwargs["temperature"] = self.temperature
 
@@ -161,15 +163,13 @@ class OpenAIClient:
             try:
                 logger.debug(
                     "Calling OpenAI model=%s json=%s attempt=%d token_param=%s",
-                    self.model, force_json, attempt + 1, self._token_param_name
+                    active_model, force_json, attempt + 1, active_token_param,
                 )
 
                 r = self._client.chat.completions.create(**kwargs)
                 msg = r.choices[0].message
                 text = (msg.content or "").strip()
 
-                # If content is empty, try once more:
-                # 1) remove response_format (older models), 2) optional model fallback.
                 if not text:
                     logger.warning("Empty content from model. Retrying once without response_format.")
                     kwargs.pop("response_format", None)
@@ -177,17 +177,14 @@ class OpenAIClient:
                     msg = r.choices[0].message
                     text = (msg.content or "").strip()
 
-                    if not text and self.enable_fallback and self.model.startswith("gpt-5"):
+                    if not text and self.enable_fallback and active_model.startswith("gpt-5"):
                         logger.warning("Still empty; falling back to gpt-4o-mini for this request.")
-                        # Swap model & token param for fallback
-                        self.model = "gpt-4o-mini"
-                        kwargs["model"] = self.model
+                        active_model = "gpt-4o-mini"
+                        kwargs["model"] = active_model
                         for k in ("max_tokens", "max_completion_tokens"):
                             kwargs.pop(k, None)
-                        self._token_param_name = _token_param_for_model(self.model)
-                        kwargs[self._token_param_name] = self.max_output_tokens
-                        # Keep temperature omitted unless explicitly set; 4o-mini supports it,
-                        # but it's fine to leave out.
+                        active_token_param = _token_param_for_model(active_model)
+                        kwargs[active_token_param] = self.max_output_tokens
                         r = self._client.chat.completions.create(**kwargs)
                         msg = r.choices[0].message
                         text = (msg.content or "").strip()
@@ -206,10 +203,10 @@ class OpenAIClient:
             except (RateLimitError, APIConnectionError, APIError, APITimeoutError) as e:
                 last_err = e
                 delay = min(2.0 * (2 ** attempt), 10.0)
-                delay += (os.urandom(1)[0] / 255.0 - 0.5) * 0.25  # jitter
+                delay += (os.urandom(1)[0] / 255.0 - 0.5) * 0.25
                 logger.warning(
                     "OpenAI transient error (%s). attempt=%d/%d; sleeping %.2fs",
-                    type(e).__name__, attempt + 1, self.max_retries, delay
+                    type(e).__name__, attempt + 1, self.max_retries, delay,
                 )
                 if attempt < self.max_retries:
                     time.sleep(delay)
@@ -217,44 +214,44 @@ class OpenAIClient:
                 break
 
             except BadRequestError as e:
-                # Handle param-compat gracefully (flip token param, drop temp/response_format)
                 body = getattr(e, "body", None) or {}
                 body_str = json.dumps(body).lower()
                 msg = str(e).lower()
 
-                # Wrong token param name → flip it
                 if "unsupported_parameter" in body_str or "unsupported parameter" in msg:
-                    if "max_tokens" in body_str and self._token_param_name == "max_tokens":
+                    if "max_tokens" in body_str and active_token_param == "max_tokens":
                         logger.warning("Server rejected max_tokens; switching to max_completion_tokens.")
                         kwargs.pop("max_tokens", None)
                         kwargs["max_completion_tokens"] = self.max_output_tokens
-                        self._token_param_name = "max_completion_tokens"
+                        active_token_param = "max_completion_tokens"
                         if attempt < self.max_retries:
-                            time.sleep(0.25); continue
-                    if "max_completion_tokens" in body_str and self._token_param_name == "max_completion_tokens":
+                            time.sleep(0.25)
+                            continue
+                    if "max_completion_tokens" in body_str and active_token_param == "max_completion_tokens":
                         logger.warning("Server rejected max_completion_tokens; switching to max_tokens.")
                         kwargs.pop("max_completion_tokens", None)
                         kwargs["max_tokens"] = self.max_output_tokens
-                        self._token_param_name = "max_tokens"
+                        active_token_param = "max_tokens"
                         if attempt < self.max_retries:
-                            time.sleep(0.25); continue
+                            time.sleep(0.25)
+                            continue
 
-                # Temperature not supported → drop it once
                 if "temperature" in msg or "temperature" in body_str:
                     if "temperature" in kwargs:
-                        logger.warning("Temperature not supported by model %s; omitting and retrying.", self.model)
+                        logger.warning("Temperature not supported by model %s; omitting and retrying.", active_model)
                         kwargs.pop("temperature", None)
                         self.temperature = None
                         if attempt < self.max_retries:
-                            time.sleep(0.25); continue
+                            time.sleep(0.25)
+                            continue
 
-                # response_format not supported → remove and retry
                 if "response_format" in msg or "response_format" in body_str:
                     if "response_format" in kwargs:
                         logger.warning("response_format not supported; removing and retrying.")
                         kwargs.pop("response_format", None)
                         if attempt < self.max_retries:
-                            time.sleep(0.25); continue
+                            time.sleep(0.25)
+                            continue
 
                 logger.error("OpenAI client error: %s", e)
                 raise
@@ -283,6 +280,6 @@ class OpenAIClient:
                     continue
                 break
 
-        if last_err:
+        if last_err is not None:
             raise last_err
-        return {}
+        raise RuntimeError("OpenAI request failed without a response")

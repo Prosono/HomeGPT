@@ -19,19 +19,16 @@ This version introduces these improvements:
 import asyncio
 import json
 import logging
-import math
 import os
 import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from statistics import mean
 from typing import Any, Dict, Iterable, List, Optional
 from openai import RateLimitError, APIError, BadRequestError
 from zoneinfo import ZoneInfo
 
 # ── Third-Party ────────────────────────────────────────────────────────────────
 import requests
-import yaml
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,18 +46,24 @@ from fastapi import HTTPException
 
 from homegpt.app.topology import (
     fetch_topology_snapshot,
-    pack_topology_for_prompt,
     pack_states_for_prompt,
-    pack_history_for_prompt,
 )
-
-_NOISE_LINES = re.compile(
-    r"^(\s*"
-    r"(SMARTi Dashboard.*|SMARTi Has .*|category_\d+_.*:|available_power_sensors_part\d+:|"
-    r"Home Assistant .*: \d+ .*|Vetle's device Climate React:.*|"
-    r"Average .*: unavailable.*|.*Missing Title:.*|.*Missing Subtitle:.*)"
-    r")\s*$",
-    re.IGNORECASE,
+from homegpt.api.analysis import (
+    DEFAULT_HISTORY_HOURS,
+    HISTORY_MAX_LINES,
+    STATE_MAX_LINES,
+    TOPO_MAX_LINES,
+    build_context_memos_block as _build_context_memos_block,
+    compose_user_prompt,
+    compress_history_for_prompt,
+    execute_analysis as _execute_analysis,
+    extract_entity_ids as _extract_entity_ids,
+    store_analysis_output as _store_analysis_output,
+)
+from homegpt.app.config import (
+    load_persisted_config,
+    load_runtime_settings,
+    save_persisted_config,
 )
 
 # =========================
@@ -75,21 +78,7 @@ OPENAI_MAX_TOOL_CHARS = int(os.getenv("OPENAI_MAX_TOOL_CHARS", "24000"))  # per 
 OPENAI_MAX_OUTPUT_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "600"))
 OPENAI_MAX_MESSAGES_CHARS = int(os.getenv("OPENAI_MAX_MSG_CHARS", "45000"))
 
-TOPO_MAX_CHARS    = 4000   # ≈1000 tokens
-STATE_MAX_CHARS   = 6000   # ≈1500 tokens
-HISTORY_MAX_CHARS = 9000   # ≈2250 tokens
-EVENTS_MAX_CHARS  = 3000   # ≈ 750 tokens
-TOTAL_MAX_CHARS   = 26000  # ≈6500 tokens (final guardrail for the whole user prompt)
-CONTEXT_MAX_CHARS = 2000   # = 500 token  - User Feedback tokens
-
-# ---------- History Compressor (signal-preserving) ----------
-
-TRUE_STATES = {"on", "open", "unlocked", "detected", "motion", "home", "present"}
-FALSE_STATES = {"off", "closed", "locked", "clear", "no_motion", "away", "not_home"}
-
-# ---------------- Global Event Buffer ----------------
-EVENT_BUFFER: list[dict] = []
-EVENT_BUFFER_MAX = 20000
+# ---------------- Shared Event Pressure Tracking ----------------
 AUTO_ANALYSIS_EVENT_THRESHOLD = 8000       # auto-run when we reach 8k events
 AUTO_ANALYSIS_MIN_INTERVAL_SEC = 60 * 60   # debounce auto-runs (15 min)
 
@@ -103,16 +92,11 @@ EVENTS_TRIGGER_UNIQUE  = 200                            # ~80 distinct entities
 AUTO_SIZE_MIN_INTERVAL_SEC = 60 * 60                   # 10 min debounce (size-based)
 
 
-# History packing defaults (prompt-balance knobs)
-DEFAULT_HISTORY_HOURS = 6         # how many hours back to fetch from /history/period
-HISTORY_MAX_LINES = 200           # how many lines we keep after packing
-STATE_MAX_LINES = 120             # lines for current state block
-TOPO_MAX_LINES = 80               # lines for topology block
-
-EVENT_LOCK = asyncio.Lock()
 _analysis_in_progress = asyncio.Event()
 _analysis_in_progress.clear()
 _last_auto_run_ts: float | None = None
+_runtime_tasks: list[asyncio.Task] = []
+_runtime_ha_clients: list[Any] = []
 
 
 # Import DB, models, analyzer
@@ -202,6 +186,8 @@ except ImportError:
         _db = _DBFallback
 db = _db  # expose as 'db'
 
+from homegpt.app import run as runtime_loop
+
 
 def _ensure_schema():
     """Create/upgrade tables used by feedback & follow-ups."""
@@ -262,40 +248,6 @@ try:
     from . import analyzer  # or: from homegpt.api import analyzer
 except Exception:
     analyzer = None
-
-def _extract_entity_ids(text: str) -> list[str]:
-    """Extract Home Assistant entity IDs from a string."""
-    pattern = r'\b(?:sensor|switch|light|climate|lock|binary_sensor|device_tracker)\.[a-zA-Z0-9_]+\b'
-    return list(dict.fromkeys(re.findall(pattern, text)))
-
-def _extract_events_from_summary(aid: int, ts: str, summary: str):
-    """
-    Split a GPT summary into per‑category events.
-    Each bullet or paragraph under Security/Comfort/Energy/Anomalies becomes its own row.
-   """
-    summary = _coerce_headings(summary)  # <<< add this
-    events = []
-    # Split the summary by markdown headings (### Security, etc.)
-    blocks = re.split(r'(?im)^###\s+', summary)
-    titles = re.findall(r'(?im)^###\s+(.+)$', summary)
-    for i, block in enumerate(blocks[1:]):
-        heading = (titles[i] or "").strip().lower()
-        if   'security'  in heading: cat = 'security'
-        elif 'comfort'   in heading: cat = 'comfort'
-        elif 'energy'    in heading: cat = 'energy'
-        elif 'anomal'    in heading: cat = 'anomalies'
-        else:
-            continue
-        # split on bullets or paragraphs
-        parts = re.split(r'(?m)^\s*[-•]\s+|^\s*$', block)
-        parts = [p.strip() for p in parts if p.strip()]
-        if not parts:
-            parts = [block.strip()]
-        for p in parts:
-            title = p.split('. ')[0][:140]
-            ent_ids = ','.join(_extract_entity_ids(p))
-            events.append((aid, ts, cat, title, p, ent_ids))
-    return events
 
 # Cache the local tz once
 _LOCAL_TZ: ZoneInfo | None = None
@@ -584,10 +536,10 @@ def _ha_snapshot_fresh() -> dict:
     }
 
 
-def _ha_snapshot_cached() -> dict:
+def _ha_snapshot_cached(force: bool = False) -> dict:
     global _SNAPSHOT_CACHE, _SNAPSHOT_TS
     now = time.time()
-    if _SNAPSHOT_CACHE and _SNAPSHOT_TS and (now - _SNAPSHOT_TS) < _SNAPSHOT_TTL_SEC:
+    if not force and _SNAPSHOT_CACHE and _SNAPSHOT_TS and (now - _SNAPSHOT_TS) < _SNAPSHOT_TTL_SEC:
         return _SNAPSHOT_CACHE
     data = _ha_snapshot_fresh()
     _SNAPSHOT_CACHE, _SNAPSHOT_TS = data, now
@@ -611,11 +563,17 @@ def _ts_to_local_iso(ts_val) -> str | None:
         # If parsing fails, return as-is
         return s
 
+
+def _reset_event_pressure() -> None:
+    global EVENT_BYTES, EVENT_UNIQUE_IDS
+    EVENT_BYTES = 0
+    EVENT_UNIQUE_IDS.clear()
+
 # Import HA + OpenAI clients and policies
 try:
     from homegpt.app.ha import HAClient
     from homegpt.app.openai_client import OpenAIClient
-    from homegpt.app.policy import SYSTEM_PASSIVE, SYSTEM_ACTIVE, ACTIONS_JSON_SCHEMA
+    from homegpt.app.policy import SYSTEM_PASSIVE
     HAVE_REAL = True
 except Exception:
     HAVE_REAL = False
@@ -623,7 +581,6 @@ except Exception:
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("HomeGPT")
 
-CONFIG_PATH = Path("/config/homegpt_config.yaml")
 FRONTEND_DIR = Path(__file__).parent / "frontend"
 
 app = FastAPI(title="HomeGPT Dashboard API")
@@ -654,7 +611,7 @@ def get_status():
     last = db.get_analyses(1)
 
     # Count events waiting in memory (cheap read; races are fine for display)
-    event_count = len(EVENT_BUFFER)
+    event_count = runtime_loop.event_count()
 
     # Compute seconds since last analysis if possible
     seconds_since_last: float | None = None
@@ -698,17 +655,6 @@ def set_mode(mode: str = Query(...)):
     cfg["mode"] = mode
     _save_config(cfg)
     return {"status": "ok", "mode": mode}
-
-
-def _coerce_headings(md: str) -> str:
-    labels = [
-        "Security","Comfort","Energy","Anomalies",
-        "Presence","Occupancy","Actions to take","Actions","Next steps"
-    ]
-    group = "|".join(map(re.escape, labels))
-    # turn lines that are just a label (optionally bold/with colon) into ### headings
-    pattern = re.compile(rf'(?im)^\s*(?:\*\*|__)?\s*({group})\s*(?:\*\*|__)?\s*:?\s*$')
-    return pattern.sub(lambda m: f"### {m.group(1)}", md or "")
 
 async def _fetch_history_all_entities(
     ha,
@@ -850,7 +796,11 @@ def _ha_search_entities(query: str, domain: Optional[str] = None):
 # ---- LLM plumbing (OpenAI tool calling) ----
 def _openai_client():
     from openai import OpenAI
-    return OpenAI()
+    cfg = _load_config()
+    api_key = cfg.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OpenAI API key is not configured")
+    return OpenAI(api_key=api_key)
 
 # Tool defs (schema-driven; model chooses what to call)
 TOOL_DEFS = [
@@ -1028,6 +978,7 @@ def ask_spectra(payload: Dict[str, Any]):
     if not q:
         raise HTTPException(status_code=400, detail="Empty question")
 
+    cfg = _load_config()
     client = _openai_client()
     messages: list[dict] = [
         {"role": "system", "content": SPECTRA_SYSTEM_PROMPT},
@@ -1041,7 +992,7 @@ def ask_spectra(payload: Dict[str, Any]):
     for _ in range(6):
         try:
             resp = client.chat.completions.create(
-                model=os.getenv("OPENAI_MODEL", "gpt-5"),
+                model=str(cfg.get("model", "gpt-5")),
                 messages=messages,
                 tools=tools,
                 tool_choice="auto",
@@ -1128,19 +1079,6 @@ def ask_spectra(payload: Dict[str, Any]):
     return {"answer_md": "Sorry, I couldn’t finish that one. Try rephrasing or narrowing the question."}
 
 #End SPectra ASk ENd
-
-def _load_context_memos(entity_ids: list[str], category: str):
-    out = []
-    with db._conn() as c:
-        # entity-specific memos
-        if entity_ids:
-            likes = [f"%{e}%" for e in entity_ids]
-            q = "SELECT ef.note FROM event_feedback ef JOIN analysis_events ev ON ev.id=ef.event_id WHERE " + " OR ".join(["ev.entity_ids LIKE ?"]*len(likes)) + " ORDER BY ef.ts DESC LIMIT 10"
-            out += [r[0] for r in c.execute(q, likes).fetchall()]
-        # generic category memos
-        q2 = "SELECT ef.note FROM event_feedback ef JOIN analysis_events ev ON ev.id=ef.event_id WHERE (ev.entity_ids IS NULL OR ev.entity_ids = '') AND ev.category=? ORDER BY ef.ts DESC LIMIT 10"
-        out += [r[0] for r in c.execute(q2, (category,)).fetchall()]
-    return out
 
 
 def _save_feedback_generic(payload: dict):
@@ -1233,152 +1171,6 @@ def _ha_search_entities(query: str, domain: Optional[str] = None):
     if not q:
         out = out[:200]
     return out[:200]
-
-
-##----------- COMPRESION start ---------------------------
-
-
-
-def strip_noise(text: str) -> str:
-    """Drop lines that are UI/config spam and blank lines."""
-    out = []
-    for line in (text or "").splitlines():
-        if not line.strip():
-            continue
-        if _NOISE_LINES.match(line):
-            continue
-        out.append(line)
-    return "\n".join(out)
-
-def clamp_chars(text: str, max_chars: int) -> str:
-    """Trim on line boundaries to max_chars and annotate if truncated."""
-    t = text or ""
-    if len(t) <= max_chars:
-        return t
-    used = 0
-    out: list[str] = []
-    for line in t.splitlines():
-        ln = len(line) + 1
-        if used + ln > max_chars:
-            break
-        out.append(line)
-        used += ln
-    out.append("… [truncated]")
-    return "\n".join(out)
-
-def _extract_followups(aid: int, ts: str, summary: str):
-    import re
-    # e.g. matches:
-    # 1) list automations
-    # 2. show energy timeline
-    # 3: troubleshoot sensor
-    FOLLOWUP_RE = re.compile(r'(?ms)^\s*\(?(\d+)[\)\.\:]\s*(.+?)(?=^\s*\(?\d+[\)\.\:]\s*|\Z)')
-    rows = []
-    for num, label in FOLLOWUP_RE.findall(summary):
-        lbl = " ".join(label.split()).strip().lower()
-        if "list" in lbl and "automation" in lbl:
-            code = "list_automations"
-        elif "timeline" in lbl and ("energy" in lbl or "sensor" in lbl):
-            code = "show_energy_timeline"
-        elif "troubleshoot" in lbl or "faulty" in lbl:
-            code = "troubleshoot_sensor"
-        else:
-            continue
-        rows.append((aid, ts, label.strip()[:255], code))
-    return rows
-
-def _build_context_memos_block(entity_ids: list[str]) -> str:
-    """
-    Pull recent user feedback (memos), prioritizing memos that mention the same
-    entity_ids, plus generic memos for each category.
-    Returns a small markdown block grouped by category.
-    """
-    cats = ["security", "comfort", "energy", "anomalies", "presence"]
-    sections: list[str] = []
-
-    for cat in cats:
-        try:
-            memos = _load_context_memos(entity_ids, cat)  # entity-targeted first, then generic
-            # keep it tight so it doesn't dominate the prompt
-            memos = list(dict.fromkeys([m.strip() for m in memos if m and m.strip()]))[:6]
-            if memos:
-                body = "\n".join(f"- {m}" for m in memos)
-                sections.append(f"### {cat.title()}\n{body}")
-        except Exception:
-            continue
-
-    block = "\n\n".join(sections)
-    return clamp_chars(block, CONTEXT_MAX_CHARS)
-
-def compose_user_prompt(
-    *,
-    lang: str,
-    hours: int | None,
-    topo: str,
-    state_block: str,
-    history_block: str,
-    events_block: str = "",
-    context_block: str = "",
-) -> str:
-    """
-    Build the final user prompt with consistent section headers and size guards.
-    Order: USER CONTEXT → TOPOLOGY → CURRENT STATE → HISTORY → EVENTS
-    """
-    # Normalize + clamp each section first (so headers aren't counted against per-section budgets)
-    def _norm(s: str) -> str:
-        return strip_noise(s or "").strip()
-
-    topo          = clamp_chars(_norm(topo),          TOPO_MAX_CHARS)
-    state_block   = clamp_chars(_norm(state_block),   STATE_MAX_CHARS)
-    history_block = clamp_chars(_norm(history_block), HISTORY_MAX_CHARS)
-    events_block  = clamp_chars(_norm(events_block),  EVENTS_MAX_CHARS)  if events_block  else ""
-    context_block = clamp_chars(_norm(context_block), CONTEXT_MAX_CHARS) if context_block else ""
-
-    # Header with concise guidance + hours hint when available
-    hrs_txt = f" Last window: {hours}h." if hours is not None else ""
-    header = (
-        f"Language: {lang}.\n"
-        "Use CURRENT STATE as ground truth. Be concise and actionable.\n"
-        "If USER CONTEXT MEMOS conflict with weak/ambiguous signals, prefer the memos."
-        f"{hrs_txt}\n\n"
-    )
-
-    # Assemble sections (skip empties)
-    sections: list[str] = []
-
-    if context_block:
-        sections.append("### USER CONTEXT MEMOS (from prior feedback)\n" + context_block)
-
-    if topo:
-        # `topo` may already include snapshot/topology text—keep a single heading.
-        if not topo.lstrip().startswith(("### ", "TOPOLOGY", "TOPOLOGY (", "USER CONTEXT")):
-            sections.append("### TOPOLOGY\n" + topo)
-        else:
-            sections.append(topo)
-
-    if state_block:
-        if not state_block.lstrip().startswith(("### ", "CURRENT STATE")):
-            sections.append("### CURRENT STATE\n" + state_block)
-        else:
-            sections.append(state_block)
-
-    if history_block:
-        title = f"### HISTORY (compressed{f', last {hours}h' if hours is not None else ''})"
-        if not history_block.lstrip().startswith("### "):
-            sections.append(title + "\n" + history_block)
-        else:
-            sections.append(history_block)
-
-    if events_block:
-        if not events_block.lstrip().startswith(("### ", "EVENTS")):
-            sections.append("### EVENTS\n" + events_block)
-        else:
-            sections.append(events_block)
-
-    body = "\n\n".join([s for s in sections if s.strip()])
-
-    # Final global clamp (keeps whole prompt under TOTAL_MAX_CHARS)
-    return clamp_chars(header + body, TOTAL_MAX_CHARS)
 
 def _truncate_list(lst, max_items):
     if not isinstance(lst, list) or len(lst) <= max_items:
@@ -1602,372 +1394,22 @@ def _clamp_tool_json_for_llm(
     s = jd(obj)
     return s[:budget_chars]
 
-def _parse_iso_aware(s: str) -> datetime:
-    # HA returns ISO like '2025-08-11T06:23:10+00:00' or without tz.
-    try:
-        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-    except Exception:
-        return datetime.now(timezone.utc)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt
-
-def _try_float(x: Any) -> float | None:
-    if x is None:
-        return None
-    try:
-        return float(str(x).replace(",", "."))
-    except Exception:
-        return None
-
-def _domain_of(eid: str) -> str:
-    return eid.split(".", 1)[0] if "." in eid else ""
-
-def _is_true_state(s: str) -> bool | None:
-    lc = str(s).strip().lower()
-    if lc in TRUE_STATES:
-        return True
-    if lc in FALSE_STATES:
-        return False
-    return None
-
-def _format_pct(p: float) -> str:
-    return f"{p:.0f}%"
-
-def _sec_hm(sec: float) -> str:
-    sec = max(0, int(sec))
-    h, r = divmod(sec, 3600)
-    m, _ = divmod(r, 60)
-    if h >= 1:
-        return f"{h}h {m}m"
-    return f"{m}m"
-
-def _compress_entity_series(series: list[dict], now: datetime, jitter_sec: int = 90) -> tuple[str, float]:
-    """
-    Returns (one_line_summary, activity_score).
-    'activity_score' is used to rank entities globally.
-    """
-    if not series:
-        return ("", 0.0)
-
-    eid = series[0].get("entity_id", "unknown.unknown")
-    domain = _domain_of(eid)
-
-    # Extract (ts, state, attrs) sorted, and coalesce jitter
-    rows = []
-    for row in series:
-        st = row.get("state")
-        ts = _parse_iso_aware(row.get("last_changed") or row.get("last_updated") or row.get("time_fired", ""))
-        rows.append((ts, st, row.get("attributes", {})))
-    rows.sort(key=lambda x: x[0])
-
-    # Coalesce successive changes within jitter_sec to reduce noise
-    coalesced: list[tuple[datetime, Any, dict]] = []
-    for ts, st, attr in rows:
-        if coalesced and (ts - coalesced[-1][0]).total_seconds() <= jitter_sec:
-            # overwrite last state if within jitter window
-            coalesced[-1] = (ts, st, attr)
-        else:
-            coalesced.append((ts, st, attr))
-    rows = coalesced
-
-    # Current/last
-    last_ts, last_state, last_attr = rows[-1]
-    last_state_str = str(last_state)
-
-    # Attempt numeric path
-    vals: list[float] = []
-    for _, st, _ in rows:
-        v = _try_float(st)
-        if v is not None and str(st).lower() not in {"unknown", "unavailable"}:
-            vals.append(v)
-
-    # Choose path based on domain/values
-    line = ""
-    activity = 0.0
-
-    # Binary-ish?
-    t_flags = [(_is_true_state(st), ts) for ts, st, _ in rows]
-    if any(tf is not None for tf, _ in t_flags) and domain in {"binary_sensor", "lock", "cover", "switch"}:
-        # Compute %true and longest true streak
-        true_dur = 0.0
-        longest_true = 0.0
-        last_t = rows[0][0]
-        prev_true = t_flags[0][0]
-        for (tf, ts), nxt in zip(t_flags, t_flags[1:] + [(None, now)]):
-            # duration until next timestamp (or now)
-            nxt_ts = nxt[1] if nxt[1] is not None else now
-            dur = (nxt_ts - ts).total_seconds()
-            if tf is True:
-                true_dur += max(0.0, dur)
-                longest_true = max(longest_true, max(0.0, dur))
-        total = (now - rows[0][0]).total_seconds() or 1.0
-        pct = true_dur / total
-        last_change_ago = _sec_hm((now - last_ts).total_seconds())
-
-        pretty_state = last_state_str.upper()
-        if domain == "lock":
-            pretty_state = "UNLOCKED" if _is_true_state(last_state_str) else "LOCKED"
-        elif domain == "cover":
-            # Many covers are numeric; if not, treat open/closed
-            pretty_state = "OPEN" if _is_true_state(last_state_str) else "CLOSED"
-        elif domain == "binary_sensor":
-            # device_class could refine, but keep generic
-            pretty_state = "ON" if _is_true_state(last_state_str) else "OFF"
-
-        line = f"- {eid}: {pretty_state} (true {_format_pct(pct)}, longest {_sec_hm(longest_true)}, last change {last_change_ago} ago)"
-        # Activity: number of effective changes per hour
-        activity = max(1.0, len(rows) / max(1.0, (now - rows[0][0]).total_seconds() / 3600.0))
-        return (line, activity)
-
-    # Numeric path
-    if len(vals) >= 2:
-        v_now = _try_float(last_state_str)
-        v_min = min(vals)
-        v_max = max(vals)
-        v_mean = mean(vals)
-        # count “meaningful” jumps (> 10% of range or absolute 1 unit)
-        rng = max(1e-9, v_max - v_min)
-        jumps = 0
-        prev = vals[0]
-        for v in vals[1:]:
-            if abs(v - prev) >= max(1.0, 0.10 * rng):
-                jumps += 1
-            prev = v
-
-        unit = last_attr.get("unit_of_measurement") or ""
-        # Energy-ish monotonic delta
-        delta_txt = ""
-        if "kwh" in unit.lower() or "wh" in unit.lower() or "energy" in eid:
-            # approximate delta if monotonic increasing
-            delta = vals[-1] - vals[0]
-            if abs(delta) > 1e-6:
-                delta_txt = f", Δ {delta:.2f}{unit}"
-
-        now_txt = f"{v_now:.2f}{unit}" if v_now is not None else last_state_str
-        line = (f"- {eid}: now {now_txt}, min {v_min:.2f}{unit}, max {v_max:.2f}{unit}, "
-                f"avg {v_mean:.2f}{unit}, changes {jumps}{delta_txt}")
-        activity = max(1.0, jumps)
-        return (line, activity)
-
-    # Fallback categorical / texty
-    line = f"- {eid}: state={last_state_str} (last change {_sec_hm((now - last_ts).total_seconds())} ago)"
-    activity = max(1.0, len(rows) / max(1.0, (now - rows[0][0]).total_seconds() / 3600.0))
-    return (line, activity)
-
-
-def compress_history_for_prompt(hist: list, *, now: datetime | None = None,
-                                max_lines: int = 160, jitter_sec: int = 90) -> str:
-    """
-    Convert HA history (list per entity) into <= max_lines bullet lines,
-    ranked by “activity” so we preserve the most informative entities.
-    """
-    if not hist:
-        return "(no history available)"
-
-    now = now or datetime.now(timezone.utc)
-    lines: list[tuple[str, float]] = []
-
-    for series in hist:
-        if not isinstance(series, list) or not series:
-            continue
-        # Skip unavailable-only series quickly
-        if all((str(r.get("state")).lower() in {"unknown", "unavailable", "none"}) for r in series):
-            continue
-        try:
-            line, score = _compress_entity_series(series, now, jitter_sec=jitter_sec)
-            if line:
-                lines.append((line, score))
-        except Exception:
-            # Defensive: never kill the run due to one entity
-            continue
-
-    if not lines:
-        return "(history had no usable states)"
-
-    # Rank by score (desc) and take top max_lines
-    lines.sort(key=lambda x: x[1], reverse=True)
-    kept = lines[:max_lines]
-    body = "\n".join(l for (l, _) in kept)
-
-    return "HISTORY (compressed):\n" + body
-
-##----------- COMPRESION END ---------------------------
-
 async def _perform_analysis(mode: str, focus: str, trigger: str = "manual"):
     """Shared analysis worker used by manual and auto triggers."""
     cfg = _load_config()
-    summary: str = ""
-    actions: list = []
-
-    if HAVE_REAL:
-        ha = HAClient()
-        gpt = OpenAIClient(model=cfg.get("model"))
-        try:
-            if mode == "passive":
-                # ----- Snapshot & clear events -----
-                async with EVENT_LOCK:
-                    global EVENT_BYTES, EVENT_UNIQUE_IDS
-                    events = EVENT_BUFFER[-EVENT_BUFFER_MAX:]
-                    EVENT_BUFFER.clear()
-                    EVENT_BYTES = 0
-                    EVENT_UNIQUE_IDS.clear()
-
-                if not events:
-                    return {"summary": "No notable events recorded.", "actions": [], "row": None}
-
-                # ----- Topology -----
-                topo = await fetch_topology_snapshot(ha, max_lines=TOPO_MAX_LINES)
-
-                # ----- Current states -----
-                all_states = await ha.states()
-                state_block = pack_states_for_prompt(all_states, max_lines=STATE_MAX_LINES)
-
-                # ----- History window -----
-                cfg_hours = int(cfg.get("history_hours", DEFAULT_HISTORY_HOURS))
-                now = datetime.now(timezone.utc).replace(microsecond=0)
-                start = (now - timedelta(hours=cfg_hours)).replace(microsecond=0)
-
-                # Prefer recent event entities for history; fall back to a subset of states
-                entity_ids = [e["entity_id"] for e in events[-10:] if e.get("entity_id")]
-                if not entity_ids:
-                    entity_ids = sorted({s.get("entity_id") for s in all_states if s.get("entity_id")})[:300]
-
-                logger.info("History query: %d ids (first 15): %s", len(entity_ids), entity_ids[:15])
-
-                # ----- History fetch (with permissive fallback) -----
-                try:
-                    hist = await ha.history_period(
-                        start.isoformat(timespec="seconds"),
-                        now.isoformat(timespec="seconds"),
-                        entity_ids=entity_ids,
-                        minimal_response=True,
-                        include_start_time_state=True,
-                        significant_changes_only=None,
-                    )
-                except Exception as e:
-                    logger.warning("History fetch failed (first attempt): %s", e)
-                    try:
-                        hist = await ha.history_period(
-                            start.isoformat(timespec="seconds"),
-                            now.isoformat(timespec="seconds"),
-                            entity_ids=entity_ids,
-                            minimal_response=False,
-                            include_start_time_state=True,
-                            significant_changes_only=False,
-                        )
-                    except Exception as e2:
-                        logger.warning("History fetch failed (second attempt): %s", e2)
-                        hist = []
-
-                # Diagnostics
-                try:
-                    groups = len(hist) if isinstance(hist, list) else 0
-                    rows = sum(len(g) for g in hist if isinstance(g, list))
-                    logger.info("History fetched: groups=%d total_rows=%d", groups, rows)
-                except Exception:
-                    pass
-
-                # ----- History compression -----
-                try:
-                    history_block = compress_history_for_prompt(
-                        hist,
-                        now=datetime.now(timezone.utc),
-                        max_lines=int(cfg.get("history_max_lines", HISTORY_MAX_LINES)),
-                        jitter_sec=int(cfg.get("history_jitter_sec", 90)),
-                    )
-                except Exception as e:
-                    logger.warning("History pack failed: %s", e)
-                    history_block = "(history unavailable)"
-
-                # ----- Event bullets (from the snapshot) -----
-                bullets = [
-                    f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
-                    for e in events[-AUTO_ANALYSIS_EVENT_THRESHOLD:]
-                ]
-                events_block = "\n".join(bullets) if bullets else "(none)"
-
-                # ----- USER CONTEXT MEMOS (entity-targeted + generic) -----
-                # Use *all* event entity_ids we have to fetch targeted memos
-                entity_ids_for_context = sorted({e.get("entity_id") for e in events if e.get("entity_id")})
-                try:
-                    # Preferred helper, if you added it
-                    context_block = _build_context_memos_block(entity_ids_for_context)  # type: ignore[name-defined]
-                except NameError:
-                    # Fallback inline builder using _load_context_memos
-                    try:
-                        cats = ["security", "comfort", "energy", "anomalies", "presence"]
-                        parts = []
-                        for cat in cats:
-                            memos = _load_context_memos(entity_ids_for_context, cat)
-                            memos = list(dict.fromkeys([m.strip() for m in memos if m and m.strip()]))[:6]
-                            if memos:
-                                parts.append("### " + cat.title() + "\n" + "\n".join(f"- {m}" for m in memos))
-                        block = "\n\n".join(parts)
-                        # keep tight; don't let memos dominate the prompt
-                        context_block = clamp_chars(block, 2000)
-                    except Exception:
-                        context_block = ""
-                logger.info("Context memos included: %d chars", len(context_block or ""))
-
-                # ----- Compose user prompt (now includes context_block) -----
-                user = compose_user_prompt(
-                    lang=cfg.get("language", "en"),
-                    hours=cfg_hours,
-                    topo=topo,
-                    state_block=state_block,
-                    history_block=history_block,
-                    events_block=events_block,
-                    context_block=context_block,
-                )
-
-                # ----- Model call -----
-                summary = gpt.complete_text(SYSTEM_PASSIVE, user)
-                actions = []
-
-            else:
-                # ----- Active mode (JSON action plan) -----
-                states = await ha.states()
-                lines = [f"{s['entity_id']}={s['state']}" for s in states[:400]]
-                user = f"Mode: {mode}\nCurrent states (subset):\n" + "\n".join(lines)
-                plan = gpt.complete_json(SYSTEM_ACTIVE, user, schema=ACTIONS_JSON_SCHEMA)
-                summary = plan.get("text") or plan.get("summary") or "No summary."
-                actions = plan.get("actions") or []
-
-        finally:
-            await ha.close()
-
-    else:
-        # Fallback (mocked)
-        summary = f"Analysis in {mode} mode. Focus: {focus or 'General'}."
-        actions = ["light.turn_off living_room", "climate.set_temperature bedroom 20°C"]
+    execution = await _execute_analysis(
+        mode=mode,
+        focus=focus,
+        cfg=cfg,
+        event_limit=runtime_loop.EVENT_BUFFER_MAX,
+        have_real=HAVE_REAL,
+        reset_event_pressure=_reset_event_pressure,
+    )
+    summary = execution.summary
+    actions = execution.actions
 
     # ----- Persist -----
-    row = db.add_analysis(mode, focus or (f"{trigger} trigger"), summary, json.dumps(actions))
-
-    # ----- Extract events & follow-ups -----
-    if isinstance(row, (list, tuple)):
-        row_id, row_ts = row[0], row[1]
-
-        # Events
-        events = _extract_events_from_summary(row_id, row_ts, summary)
-        if events:
-            with db._conn() as c:
-                c.executemany(
-                    "INSERT OR IGNORE INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) VALUES (?,?,?,?,?,?)",
-                    events
-                )
-                c.commit()
-
-        # Follow-ups
-        fups = _extract_followups(row_id, row_ts, summary)
-        if fups:
-            with db._conn() as c:
-                c.executemany(
-                    "INSERT INTO followup_requests (analysis_id, ts, label, code) VALUES (?,?,?,?)",
-                    fups,
-                )
-                c.commit()
+    row = _store_analysis_output(mode, focus or (f"{trigger} trigger"), summary, actions)
 
     # ----- Notify -----
     if HAVE_REAL:
@@ -2256,7 +1698,7 @@ async def run_history(hours: int = Query(..., ge=1, le=48)):
     try:
         if HAVE_REAL:
             ha = HAClient()
-            gpt = OpenAIClient(model=cfg.get("model"))
+            gpt = OpenAIClient(model=cfg.get("model"), api_key=cfg.get("openai_api_key") or None)
             try:
                 # 1) Topology
                 topo = await fetch_topology_snapshot(ha, max_lines=TOPO_MAX_LINES)
@@ -2299,24 +1741,7 @@ async def run_history(hours: int = Query(..., ge=1, le=48)):
                     s.get("entity_id") for s in all_states if s.get("entity_id")
                 ][:max_all_entities]
 
-                try:
-                    # Preferred helper if you added it (formats + clamps internally)
-                    context_block = _build_context_memos_block(entity_ids_for_context)  # type: ignore[name-defined]
-                except NameError:
-                    # Fallback inline builder using _load_context_memos + clamp_chars
-                    try:
-                        cats = ["security", "comfort", "energy", "anomalies", "presence"]
-                        parts = []
-                        for cat in cats:
-                            memos = _load_context_memos(entity_ids_for_context, cat)
-                            # de-dupe + clamp count per category
-                            memos = list(dict.fromkeys([m.strip() for m in memos if m and m.strip()]))[:6]
-                            if memos:
-                                parts.append("### " + cat.title() + "\n" + "\n".join(f"- {m}" for m in memos))
-                        block = "\n\n".join(parts)
-                        context_block = clamp_chars(block, 2000)
-                    except Exception:
-                        context_block = ""
+                context_block = _build_context_memos_block(entity_ids_for_context)
 
                 logger.info("Context memos included (history run): %d chars", len(context_block or ""))
 
@@ -2341,31 +1766,8 @@ async def run_history(hours: int = Query(..., ge=1, le=48)):
             summary = f"History analysis for {hours} hours (simulated)."
             actions = []
 
-        # 9) Persist (same as /api/run)
-        row = db.add_analysis(mode, focus, summary, json.dumps(actions))
-
-        if isinstance(row, (list, tuple)):
-            row_id, row_ts = row[0], row[1]
-
-            # Events
-            events = _extract_events_from_summary(row_id, row_ts, summary)
-            if events:
-                with db._conn() as c:
-                    c.executemany(
-                        "INSERT OR IGNORE INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) VALUES (?,?,?,?,?,?)",
-                        events
-                    )
-                    c.commit()
-
-            # Followups
-            fups = _extract_followups(row_id, row_ts, summary)
-            if fups:
-                with db._conn() as c:
-                    c.executemany(
-                        "INSERT INTO followup_requests (analysis_id, ts, label, code) VALUES (?,?,?,?)",
-                        fups
-                    )
-                    c.commit()
+        # 9) Persist
+        row = _store_analysis_output(mode, focus, summary, actions)
 
         # 10) Notify
         if HAVE_REAL:
@@ -2418,169 +1820,19 @@ async def run_analysis(request: AnalysisRequest = Body(...)):
     logger.info("Run analysis (UI): mode=%s focus=%s", mode, focus)
 
     try:
-        if HAVE_REAL:
-            ha = HAClient()
-            gpt = OpenAIClient(model=cfg.get("model"))
-            try:
-                if mode == "passive":
-                    # 1) Snapshot & clear atomically (limit to last 2000 events for UI-sized runs)
-                    async with EVENT_LOCK:
-                        global EVENT_BYTES, EVENT_UNIQUE_IDS
-                        events = EVENT_BUFFER[-2000:]
-                        EVENT_BUFFER.clear()
-                        EVENT_BYTES = 0
-                        EVENT_UNIQUE_IDS.clear()
-
-                    # 2) Topology
-                    topo = await fetch_topology_snapshot(ha, max_lines=TOPO_MAX_LINES)
-
-                    # 3) CURRENT STATE
-                    all_states = await ha.states()
-                    state_block = pack_states_for_prompt(all_states, max_lines=STATE_MAX_LINES)
-
-                    # 4) HISTORY (prefer recent event entities, else subset of states)
-                    cfg_hours = int(_load_config().get("history_hours", DEFAULT_HISTORY_HOURS))
-                    now = datetime.now(timezone.utc).replace(microsecond=0)
-                    start = (now - timedelta(hours=cfg_hours)).replace(microsecond=0)
-
-                    entity_ids = sorted({e.get("entity_id") for e in events if e.get("entity_id")})[:100]
-                    if not entity_ids:
-                        entity_ids = sorted({s.get("entity_id") for s in all_states if s.get("entity_id")})[:300]
-
-                    logger.info("History query (UI run): %d ids (first 15): %s", len(entity_ids), entity_ids[:15])
-
-                    # Fetch history with a permissive fallback
-                    try:
-                        hist = await ha.history_period(
-                            start.isoformat(timespec="seconds"),
-                            now.isoformat(timespec="seconds"),
-                            entity_ids=entity_ids,
-                            minimal_response=True,
-                            include_start_time_state=True,
-                            significant_changes_only=None,
-                        )
-                    except Exception as e:
-                        logger.warning("History fetch failed (first attempt): %s", e)
-                        try:
-                            hist = await ha.history_period(
-                                start.isoformat(timespec="seconds"),
-                                now.isoformat(timespec="seconds"),
-                                entity_ids=entity_ids,
-                                minimal_response=False,
-                                include_start_time_state=True,
-                                significant_changes_only=False,  # most permissive
-                            )
-                        except Exception as e2:
-                            logger.warning("History fetch failed (second attempt): %s", e2)
-                            hist = []
-
-                    # Diagnostics
-                    try:
-                        groups = len(hist) if isinstance(hist, list) else 0
-                        rows = sum(len(g) for g in hist if isinstance(g, list))
-                        logger.info("History fetched for prompt (UI run): groups=%d total_rows=%d", groups, rows)
-                    except Exception:
-                        pass
-
-                    # 5) Compress history (always set history_block)
-                    try:
-                        history_block = compress_history_for_prompt(
-                            hist,
-                            now=datetime.now(timezone.utc),
-                            max_lines=int(_load_config().get("history_max_lines", HISTORY_MAX_LINES)),
-                            jitter_sec=int(_load_config().get("history_jitter_sec", 90)),
-                        )
-                    except Exception as e:
-                        logger.warning("History pack failed: %s", e)
-                        history_block = "(history unavailable)"
-
-                    # 6) Recent event bullets (from the snapshot we took)
-                    bullets = [
-                        f"{e['ts']} · {e['entity_id']} : {e['from']} → {e['to']}"
-                        for e in events
-                    ]
-                    events_block = "\n".join(bullets) if bullets else "(none)"
-
-                    # 7) USER CONTEXT MEMOS (entity-targeted + generic per category)
-                    # Use all event entity_ids (or fall back to history entity_ids) to scope the memos
-                    entity_ids_for_context = sorted({e.get("entity_id") for e in events if e.get("entity_id")}) or entity_ids
-                    try:
-                        # If you created a helper that formats + clamps:
-                        context_block = _build_context_memos_block(entity_ids_for_context)  # type: ignore[name-defined]
-                    except NameError:
-                        # Fallback: inline build using _load_context_memos
-                        try:
-                            cats = ["security", "comfort", "energy", "anomalies", "presence"]
-                            parts = []
-                            for cat in cats:
-                                memos = _load_context_memos(entity_ids_for_context, cat)
-                                memos = list(dict.fromkeys([m.strip() for m in memos if m and m.strip()]))[:6]
-                                if memos:
-                                    parts.append("### " + cat.title() + "\n" + "\n".join(f"- {m}" for m in memos))
-                            block = "\n\n".join(parts)
-                            context_block = clamp_chars(block, 2000)  # keep tight
-                        except Exception:
-                            context_block = ""
-                    logger.info("Context memos included (UI run): %d chars", len(context_block or ""))
-
-                    # 8) Compose prompt (now includes context_block)
-                    user = compose_user_prompt(
-                        lang=cfg.get("language", "en"),
-                        hours=cfg_hours,
-                        topo=topo,
-                        state_block=state_block,
-                        history_block=history_block,
-                        events_block=events_block,
-                        context_block=context_block,   # <— new
-                    )
-
-                    # 9) Call the text model
-                    summary = gpt.complete_text(SYSTEM_PASSIVE, user)
-                    actions = []
-
-                else:
-                    # ACTIVE mode (JSON plan)
-                    states = await ha.states()
-                    lines = [f"{s['entity_id']}={s['state']}" for s in states[:400]]
-                    user = f"Mode: {mode}\nCurrent states (subset):\n" + "\n".join(lines)
-                    plan = gpt.complete_json(SYSTEM_ACTIVE, user, schema=ACTIONS_JSON_SCHEMA)
-                    summary = plan.get("text") or plan.get("summary") or "No summary."
-                    actions = plan.get("actions") or []
-
-            finally:
-                await ha.close()
-
-        else:
-            # Fallback (mocked)
-            summary = f"Analysis in {mode} mode. Focus: {focus or 'General'}."
-            actions = ["light.turn_off living_room", "climate.set_temperature bedroom 20°C"]
+        execution = await _execute_analysis(
+            mode=mode,
+            focus=focus,
+            cfg=cfg,
+            event_limit=2000,
+            have_real=HAVE_REAL,
+            reset_event_pressure=_reset_event_pressure,
+        )
+        summary = execution.summary
+        actions = execution.actions
 
         # Persist the analysis
-        row = db.add_analysis(mode, focus, summary, json.dumps(actions))
-
-        # Extract events + followups (same as run_history)
-        if isinstance(row, (list, tuple)):
-            row_id, row_ts = row[0], row[1]
-
-            # Events
-            events = _extract_events_from_summary(row_id, row_ts, summary)
-            if events:
-                with db._conn() as c:
-                    c.executemany(
-                        "INSERT OR IGNORE INTO analysis_events (analysis_id, ts, category, title, body, entity_ids) VALUES (?,?,?,?,?,?)",
-                        events
-                    )
-                    c.commit()
-
-            # Followups
-            fups = _extract_followups(row_id, row_ts, summary)
-            if fups:
-                with db._conn() as c:
-                    c.executemany(
-                        "INSERT INTO followup_requests (analysis_id, ts, label, code) VALUES (?,?,?,?)",
-                        fups,
-                    )
-                    c.commit()
+        row = _store_analysis_output(mode, focus, summary, actions)
 
         # Notify HA so the result is visible immediately
         if HAVE_REAL:
@@ -2782,87 +2034,89 @@ def get_settings():
 
 
 @app.post("/api/settings")
-def update_settings(settings: Settings):
+async def update_settings(settings: Settings):
     logger.info(f"Updating settings from UI: {settings}")
-    cfg = _load_config()
-    data = {k: v for k, v in settings.dict().items() if v is not None}
+    cfg = load_persisted_config()
+    data = {k: v for k, v in settings.model_dump().items() if v is not None}
     cfg.update(data)
     _save_config(cfg)
+    await _start_runtime_tasks()
     return {"status": "ok"}
 
 
 # ---------------- Config Helpers ----------------
 def _load_config() -> dict:
-    if CONFIG_PATH.exists():
-        return yaml.safe_load(CONFIG_PATH.read_text()) or {}
-    return {"mode": "passive", "model": "gpt-5", "dry_run": True}
+    return load_runtime_settings()
 
 
 def _save_config(data: dict) -> None:
-    CONFIG_PATH.write_text(yaml.safe_dump(data))
+    save_persisted_config(data)
 
 
-# ---------------- Background Event Listener ----------------
-async def ha_event_listener():
+async def _handle_runtime_event(data: dict, buffered_count: int) -> None:
+    global EVENT_BYTES, EVENT_UNIQUE_IDS, _last_auto_run_ts
+
+    eid = data.get("entity_id") or ""
+    oldv = str(data.get("from") or "")
+    newv = str(data.get("to") or "")
+    approx_len = 32 + len(eid) + len(oldv) + len(newv)
+    EVENT_BYTES += approx_len
+    if eid:
+        EVENT_UNIQUE_IDS.add(eid)
+
+    count_pressure = buffered_count >= AUTO_ANALYSIS_EVENT_THRESHOLD
+    size_pressure = (
+        EVENT_BYTES >= EVENTS_TRIGGER_CHARS
+        or len(EVENT_UNIQUE_IDS) >= EVENTS_TRIGGER_UNIQUE
+    )
+
+    now_mono = asyncio.get_running_loop().time()
+    last_ts = _last_auto_run_ts or 0.0
+    recent_enough_count = (now_mono - last_ts) >= AUTO_ANALYSIS_MIN_INTERVAL_SEC
+    recent_enough_size = (now_mono - last_ts) >= AUTO_SIZE_MIN_INTERVAL_SEC
+    idle = not _analysis_in_progress.is_set()
+
+    if idle and ((size_pressure and recent_enough_size) or (count_pressure and recent_enough_count)):
+        reason = "Auto (size pressure)" if size_pressure else "Auto (event threshold)"
+        asyncio.create_task(_auto_trigger(reason))
+
+
+async def _start_runtime_tasks() -> None:
+    global _runtime_tasks, _runtime_ha_clients
+
+    if _runtime_tasks:
+        return
     if not HAVE_REAL:
-        logger.warning("HA integration not available — event listener disabled.")
+        logger.warning("HA integration not available — runtime loops disabled.")
         return
 
-    ha = HAClient()
-    while True:
-        try:
-            async for evt in ha.websocket_events():
+    cfg = _load_config()
+    api_key = cfg.get("openai_api_key") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        logger.warning("OpenAI API key missing — runtime loops disabled until configured.")
+        return
+
+    try:
+        summary_ha = HAClient()
+        control_ha = HAClient()
+        summary_gpt = OpenAIClient(model=cfg.get("model"), api_key=api_key)
+        control_gpt = OpenAIClient(model=cfg.get("model"), api_key=api_key)
+    except Exception as exc:
+        logger.warning("Failed to start runtime loops: %s", exc)
+        for client in [locals().get("summary_ha"), locals().get("control_ha")]:
+            if client is not None:
                 try:
-                    data = {
-                        "ts": evt["time_fired"],
-                        "entity_id": evt["data"]["entity_id"],
-                        "from": evt["data"]["old_state"]["state"] if evt["data"]["old_state"] else None,
-                        "to": evt["data"]["new_state"]["state"] if evt["data"]["new_state"] else None,
-                    }
-                    async with EVENT_LOCK:
-                        global EVENT_BYTES, EVENT_UNIQUE_IDS
-                        EVENT_BUFFER.append(data)
-                        if len(EVENT_BUFFER) > EVENT_BUFFER_MAX:
-                            del EVENT_BUFFER[: len(EVENT_BUFFER) - EVENT_BUFFER_MAX]
+                    await client.close()
+                except Exception:
+                    pass
+        return
 
-                        # --- size pressure accounting (very cheap) ---
-                        eid = data.get("entity_id") or ""
-                        oldv = str(data.get("from") or "")
-                        newv = str(data.get("to") or "")
-                        # approximate length of the bullet line we will render later
-                        approx_len = 32 + len(eid) + len(oldv) + len(newv)  # timestamp+separators ~= 32
-                        EVENT_BYTES += approx_len
-                        if eid:
-                            EVENT_UNIQUE_IDS.add(eid)
-
-                        # --- classic event-count trigger ---
-                        count_pressure = len(EVENT_BUFFER) >= AUTO_ANALYSIS_EVENT_THRESHOLD
-
-                        # --- size pressure trigger (fires earlier than count) ---
-                        size_pressure = (
-                            EVENT_BYTES >= EVENTS_TRIGGER_CHARS
-                            or len(EVENT_UNIQUE_IDS) >= EVENTS_TRIGGER_UNIQUE
-                        )
-
-                        # debounce + “not already analyzing”
-                        now_mono = asyncio.get_event_loop().time()
-                        global _last_auto_run_ts
-                        # choose the right cool-down: size pressure can be a bit more frequent
-                        last_ts = _last_auto_run_ts or 0.0
-                        recent_enough_count = (now_mono - last_ts) >= AUTO_ANALYSIS_MIN_INTERVAL_SEC
-                        recent_enough_size  = (now_mono - last_ts) >= AUTO_SIZE_MIN_INTERVAL_SEC
-                        idle = not _analysis_in_progress.is_set()
-
-                    # Decide reason & fire (don’t block the event loop)
-                    if idle and ((size_pressure and recent_enough_size) or (count_pressure and recent_enough_count)):
-                        reason = "Auto (size pressure)" if size_pressure else "Auto (event threshold)"
-                        asyncio.create_task(_auto_trigger(reason))
-
-                except Exception as ex:
-                    logger.exception(f"Error processing event: {ex}")
-        except Exception as ex:
-            logger.error(f"HA websocket disconnected: {ex}, reconnecting in 5s...")
-            await asyncio.sleep(5)
+    _runtime_ha_clients = [summary_ha, control_ha]
+    _runtime_tasks = [
+        asyncio.create_task(runtime_loop.summarize_daily(summary_ha, summary_gpt)),
+        asyncio.create_task(runtime_loop.reactive_control(control_ha, control_gpt, on_event=_handle_runtime_event)),
+    ]
+    logger.info("HomeGPT runtime loops started inside API process.")
 
 
 async def _auto_trigger(reason: str = "auto"):
@@ -2883,5 +2137,28 @@ async def _auto_trigger(reason: str = "auto"):
 
 @app.on_event("startup")
 async def startup_event():
-    asyncio.create_task(ha_event_listener())
-    logger.info("HomeGPT API started — background event listener running.")
+    await _start_runtime_tasks()
+    logger.info("HomeGPT API started.")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    global _runtime_tasks, _runtime_ha_clients
+
+    for task in _runtime_tasks:
+        task.cancel()
+    for task in _runtime_tasks:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.warning("Runtime task shutdown error: %s", exc)
+    _runtime_tasks = []
+
+    for client in _runtime_ha_clients:
+        try:
+            await client.close()
+        except Exception as exc:
+            logger.warning("HA client shutdown error: %s", exc)
+    _runtime_ha_clients = []

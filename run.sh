@@ -24,19 +24,5 @@ if [[ -z "${SUPERVISOR_TOKEN:-}" ]]; then
   exit 1
 fi
 
-echo "Starting HomeGPT dashboard API on port 8099..."
-python3 -m uvicorn homegpt.api.main:app --host 0.0.0.0 --port 8099 &
-
-API_PID=$!
-
-echo "Starting HomeGPT core process..."
-python3 -m homegpt.app.run &
-AI_PID=$!
-
-# If either dies, stop the other so Supervisor restarts us
-wait -n
-EXIT_CODE=$?
-echo "One process exited with code $EXIT_CODE, stopping the other..."
-kill $API_PID $AI_PID 2>/dev/null || true
-wait
-exit $EXIT_CODE
+echo "Starting HomeGPT API and runtime on port 8099..."
+exec python3 -m uvicorn homegpt.api.main:app --host 0.0.0.0 --port 8099

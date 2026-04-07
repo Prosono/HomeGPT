@@ -7,7 +7,7 @@ Notes:
 """
 
 from typing import Optional, List
-from pydantic import BaseModel, root_validator, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # ---------- Analysis requests / responses ----------
@@ -20,6 +20,8 @@ class AnalysisRequest(BaseModel):
 
 class AnalysisSummary(BaseModel):
     """Describes a stored analysis (if you ever serialize to this)."""
+    model_config = ConfigDict(populate_by_name=True)
+
     id: int
     # If you ever hydrate from DB rows with 'ts', this alias keeps it compatible:
     timestamp: str = Field(..., alias="ts")
@@ -27,20 +29,16 @@ class AnalysisSummary(BaseModel):
     focus: Optional[str]
     summary: str
 
-    class Config:
-        allow_population_by_field_name = True
-
 
 class AnalysisListItem(BaseModel):
     """Lightweight history row."""
+    model_config = ConfigDict(populate_by_name=True)
+
     id: int
     timestamp: str = Field(..., alias="ts")
     mode: str
     focus: Optional[str]
     summary: str
-
-    class Config:
-        allow_population_by_field_name = True
 
 
 # ---------- Settings (all optional for PATCH-like behavior) ----------
@@ -95,7 +93,8 @@ class EventFeedbackIn(BaseModel):
     kind: Optional[str] = "context"
 
     # Accept legacy 'feedback' as an alias for 'note'
-    @root_validator(pre=True)
+    @model_validator(mode="before")
+    @classmethod
     def _map_feedback_alias(cls, v):
         if v is None:
             return v

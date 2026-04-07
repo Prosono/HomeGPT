@@ -73,8 +73,6 @@ def pack_topology_for_prompt(
 
 
 async def fetch_topology_snapshot(ha, max_lines: int = 80) -> str:
-    lines = ["TOPOLOGY SNAPSHOT", ""]
-
     try:
         # Full snapshot
         areas, devices, entities, states = await asyncio.gather(
@@ -92,11 +90,28 @@ async def fetch_topology_snapshot(ha, max_lines: int = 80) -> str:
         )
         entities = []
 
-    # …build your summary from areas/devices/entities/states as before…
-    # Keep it compact and guard against huge outputs:
-    # if len(lines) > max_lines: lines = lines[:max_lines-1] + ["… (truncated)"]
+    summary = pack_topology_for_prompt(
+        areas=areas,
+        devices=devices,
+        entities=entities,
+        states=states,
+        max_lines=max_lines,
+    )
+    if entities:
+        return summary
 
-    return "\n".join(lines[: max_lines - 1] + ["… (truncated)"] if len(lines) > max_lines else lines)
+    # If entity registry calls fail, still return a useful coarse snapshot.
+    lines = [
+        "HOME TOPOLOGY (fallback)",
+        f"Areas={len(areas)} Devices={len(devices)} States={len(states)}",
+    ]
+    people_lines = [
+        line
+        for line in summary.splitlines()
+        if line == "PEOPLE:" or line.startswith(" - ")
+    ]
+    lines.extend(people_lines[: max(0, max_lines - len(lines))])
+    return "\n".join(lines[:max_lines])
 
 def pack_states_for_prompt(
     states: list[dict],
