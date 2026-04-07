@@ -3,6 +3,9 @@ const base = window.location.pathname.replace(/\/$/, "");
 const api  = (p) => `${base}/api/${p}`;
 const $    = (id) => document.getElementById(id);
 const THEME_KEY = "homegpt-theme";
+const POLL_INTERVAL_MS = 100000;
+let pollTimer = null;
+let refreshPromise = null;
 
 function readCssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -12,11 +15,11 @@ function chartPalette() {
   return {
     text: readCssVar("--chart-text") || "#6b7280",
     grid: readCssVar("--chart-grid") || "rgba(0,0,0,0.08)",
-    energy: readCssVar("--chart-energy") || "#3d7a69",
-    power: readCssVar("--chart-power") || "#7d4a11",
-    security: readCssVar("--chart-security") || "#a3493f",
-    comfort: readCssVar("--chart-comfort") || "#c4802f",
-    anomaly: readCssVar("--chart-anomaly") || "#6a5690",
+    energy: readCssVar("--chart-energy") || "#0f766e",
+    power: readCssVar("--chart-power") || "#2563eb",
+    security: readCssVar("--chart-security") || "#dc2626",
+    comfort: readCssVar("--chart-comfort") || "#f59e0b",
+    anomaly: readCssVar("--chart-anomaly") || "#7c3aed",
   };
 }
 
@@ -153,7 +156,7 @@ const snippet = (text, max = 140) => {
 };
 
 const formatDuration = (seconds) => {
-  if (seconds == null || Number.isNaN(Number(seconds))) return "No analysis yet";
+  if (seconds == null || Number.isNaN(Number(seconds))) return "No review yet";
   const sec = Math.max(0, Math.floor(Number(seconds)));
   const days = Math.floor(sec / 86400);
   const hours = Math.floor((sec % 86400) / 3600);
@@ -282,11 +285,11 @@ function escapeHtml(s=""){return s.replace(/[&<>"]/g,c=>({ "&":"&amp;","<":"&lt;
 async function renderFeedbackListForEvent(eid) {
   const box = document.getElementById(`fb-list-${eid}`);
   if (!box) return;
-  box.innerHTML = "<div class='text-gray-400 text-sm'>Loading…</div>";
+  box.innerHTML = "<div class='inline-status'><i class='mdi mdi-message-search-outline' aria-hidden='true'></i><span>Loading saved guidance…</span></div>";
   try {
     const rows = await jsonFetch(api(`feedback?event_id=${eid}&limit=50`)) || [];
     if (!rows.length) {
-      box.innerHTML = "<div class='text-gray-400 text-sm'>No feedback yet.</div>";
+      box.innerHTML = "<div class='empty-state'><i class='mdi mdi-message-outline' aria-hidden='true'></i><span>No saved guidance for this signal yet.</span></div>";
       return;
     }
     box.innerHTML = rows.map(r => `
@@ -297,7 +300,7 @@ async function renderFeedbackListForEvent(eid) {
     `).join("");
   } catch (e) {
     console.error("feedback load failed:", e);
-    box.innerHTML = "<div class='text-red-400 text-sm'>Failed to load feedback.</div>";
+    box.innerHTML = "<div class='inline-status inline-status--error'><i class='mdi mdi-alert-circle-outline' aria-hidden='true'></i><span>Could not load saved guidance.</span></div>";
   }
 }
 
@@ -608,7 +611,7 @@ function renderAnalysisTimeline(historyRows) {
 
   const rows = Array.isArray(historyRows) ? historyRows.slice(0, 12) : [];
   if (!rows.length) {
-    container.innerHTML = "<div class='text-sm text-gray-400'>No completed analyses yet.</div>";
+    container.innerHTML = "<div class='empty-state'><i class='mdi mdi-timeline-outline' aria-hidden='true'></i><span>No reviews yet. Run a fresh review to build the timeline.</span></div>";
     return;
   }
 
@@ -865,61 +868,78 @@ function highlightCards(rowsAtHour, catKey) {
   });
 }
 
-// hook up filter buttons
-function initHeatmapFilters(rows) {
-  document.querySelectorAll('[data-hm-filter]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const f = btn.getAttribute('data-hm-filter');
-      renderHeatmap(rows, f);
-    });
-  });
+const HM_STATE = { range: 48, filter: "all", threshold: 0 };
+
+function rerenderHeatmapFromState() {
+  if (!window._historyRows?.length) return;
+  renderHeatmap(window._historyRows, HM_STATE);
 }
 
+function syncHeatmapControls() {
+  document.querySelectorAll('[data-hm-range]').forEach(btn => {
+    const value = parseInt(btn.getAttribute('data-hm-range'), 10) || 24;
+    btn.setAttribute('aria-pressed', value === HM_STATE.range ? 'true' : 'false');
+  });
 
+  document.querySelectorAll('[data-hm-filter]').forEach(btn => {
+    const value = btn.getAttribute('data-hm-filter') || 'all';
+    btn.setAttribute('aria-pressed', value === HM_STATE.filter ? 'true' : 'false');
+  });
 
-async function loadHistory() {
-  let rows = await jsonFetch(api("history"));
-  if (!rows) rows = [];
-  const dataRows = Array.isArray(rows) ? rows : Object.values(rows);
-  window._historyRows = dataRows;
-  
-  renderAnalysisTimeline(dataRows);
-  renderGrid(dataRows); // existing cards
-  renderOverview(dataRows);
+  const thr = document.getElementById('hm-threshold');
+  const thrVal = document.getElementById('hm-threshold-val');
+  if (thr) thr.value = String(HM_STATE.threshold);
+  if (thrVal) thrVal.textContent = String(HM_STATE.threshold);
+}
 
-  let HM_STATE = { range: 24, filter: "all", threshold: 0 };
+function initHeatmapFilters() {
+  if (window._heatmapControlsBound) {
+    syncHeatmapControls();
+    return;
+  }
 
-  renderHeatmap(dataRows, HM_STATE);
-
-  // filter chips
   document.querySelectorAll('[data-hm-filter]').forEach(btn => {
     btn.addEventListener('click', () => {
-      HM_STATE.filter = btn.getAttribute('data-hm-filter');
-      renderHeatmap(dataRows, HM_STATE);
+      HM_STATE.filter = btn.getAttribute('data-hm-filter') || 'all';
+      syncHeatmapControls();
+      rerenderHeatmapFromState();
     });
   });
 
-  // range chips
   document.querySelectorAll('[data-hm-range]').forEach(btn => {
     btn.addEventListener('click', () => {
       HM_STATE.range = parseInt(btn.getAttribute('data-hm-range'), 10) || 24;
-      renderHeatmap(dataRows, HM_STATE);
+      syncHeatmapControls();
+      rerenderHeatmapFromState();
     });
   });
 
-  // severity threshold slider
   const thr = document.getElementById('hm-threshold');
   const thrVal = document.getElementById('hm-threshold-val');
   if (thr && thrVal) {
     thr.addEventListener('input', () => {
       HM_STATE.threshold = parseInt(thr.value, 10) || 0;
       thrVal.textContent = String(HM_STATE.threshold);
-      renderHeatmap(dataRows, HM_STATE);
+      rerenderHeatmapFromState();
     });
   }
 
+  window._heatmapControlsBound = true;
+  syncHeatmapControls();
+}
 
-  initHeatmapFilters(dataRows);
+async function loadHistory() {
+  let rows = await jsonFetch(api("history"));
+  if (!rows) rows = [];
+  const dataRows = Array.isArray(rows) ? rows : Object.values(rows);
+  window._historyRows = dataRows;
+
+  renderAnalysisTimeline(dataRows);
+  renderGrid(dataRows); // existing cards
+  renderOverview(dataRows);
+
+  initHeatmapFilters();
+  renderHeatmap(dataRows, HM_STATE);
 
   
 
@@ -1287,7 +1307,7 @@ function openFeedbackDialog({
 
     } catch (err) {
       console.error("Feedback error:", err);
-      if (resEl) resEl.textContent = "Sorry, failed to save feedback.";
+      if (resEl) resEl.textContent = "Could not save guidance.";
     } finally {
       submitBtn && (submitBtn.disabled = false);
     }
@@ -1369,23 +1389,23 @@ function renderStatus(data) {
   const last = data.last_analysis || null;
   const lastTs = last?.ts || last?.[1] || null;
 
-  const eventText = `${count} buffered event${count === 1 ? "" : "s"}`;
+  const eventText = `${count} signal${count === 1 ? "" : "s"} ready`;
   if ($("eventCount")) $("eventCount").textContent = eventText;
   if ($("sinceLast")) $("sinceLast").textContent = formatDuration(data.seconds_since_last);
   if ($("lastAnalysisStamp")) {
     $("lastAnalysisStamp").textContent = lastTs
-      ? `Most recent run: ${new Date(lastTs).toLocaleString()}`
-      : "Run a fresh analysis to populate the dashboard";
+      ? `Last completed ${new Date(lastTs).toLocaleString()}`
+      : "Run a review to start filling the dashboard.";
   }
   if ($("modeName")) $("modeName").textContent = cap(mode);
   if ($("modeHint")) {
     $("modeHint").textContent = mode === "active"
-      ? (dryRun ? "Can draft allow-listed actions while dry run is on." : "Can act on allow-listed entities when needed.")
-      : "Observes your home and reports back clearly.";
+      ? (dryRun ? "Can prepare safe actions before anything goes live." : "Can act on approved devices when a fix is worthwhile.")
+      : "Watches your home and explains what changed.";
   }
   if ($("modelName")) $("modelName").textContent = model;
   if ($("dryRunState")) $("dryRunState").textContent = dryRun ? "Dry run on" : "Live actions enabled";
-  if ($("historyWindow")) $("historyWindow").textContent = `${windowHours}h default window`;
+  if ($("historyWindow")) $("historyWindow").textContent = `${windowHours}h lookback`;
   if ($("toggleMode")) $("toggleMode").dataset.mode = mode;
 }
 
@@ -1393,7 +1413,7 @@ function renderOverview(rows) {
   const lead = $("overviewLead");
   if (!lead) return;
   if (!rows?.length) {
-    lead.textContent = "Run a fresh analysis to see where energy use, comfort drift, and repeated issues deserve attention.";
+    lead.textContent = "Run a review to reveal the biggest energy peaks, comfort shifts, and issues worth fixing first.";
     return;
   }
 
@@ -1404,7 +1424,7 @@ function renderOverview(rows) {
   const firstUseful = sections.map(sectionSnippet).find(Boolean) || snippet(latest.summary || "", 210);
   const prefix = latest.mode === "active"
     ? "Latest active review:"
-    : "Latest home summary:";
+    : "Latest overview:";
   lead.textContent = `${prefix} ${firstUseful}`;
 }
 
@@ -1591,7 +1611,7 @@ async function loadEvents() {
     listEl.innerHTML = "";
 
     if (!slice.length) {
-      listEl.innerHTML = `<div class="text-sm text-gray-400 py-3">No events in the last 24h.</div>`;
+      listEl.innerHTML = `<div class="empty-state"><i class="mdi mdi-radar" aria-hidden="true"></i><span>No notable signals arrived in the last 24 hours.</span></div>`;
       return;
     }
 
@@ -1684,6 +1704,32 @@ async function loadEvents() {
 
 
 
+async function refreshDashboard() {
+  if (refreshPromise) return refreshPromise;
+  refreshPromise = Promise.allSettled([
+    loadStatus(),
+    loadHistory(),
+    loadEvents()
+  ]).finally(() => {
+    refreshPromise = null;
+  });
+  return refreshPromise;
+}
+
+function stopPolling() {
+  if (!pollTimer) return;
+  clearInterval(pollTimer);
+  pollTimer = null;
+}
+
+function startPolling() {
+  if (pollTimer || document.hidden) return;
+  pollTimer = window.setInterval(() => {
+    if (document.hidden) return;
+    refreshDashboard().catch(console.error);
+  }, POLL_INTERVAL_MS);
+}
+
 // ---------- Click handler using the controller ----------
 async function runAnalysisNow() {
   const btn = document.getElementById("runAnalysis");
@@ -1705,8 +1751,7 @@ async function runAnalysisNow() {
     });
     // snap to 100% as soon as we have a response
     prog.finish();
-    await loadHistory();
-    await loadStatus();
+    await refreshDashboard();
   } catch (e) {
     console.error("runAnalysis failed:", e);
     // still complete the bar so UI doesn't get stuck
@@ -1718,33 +1763,6 @@ async function runAnalysisNow() {
   }
 }
 
-document.addEventListener('click', (e) => {
-  const btn = e.target.closest('.btn-toggle .chip');
-  if (!btn) return;
-
-  const group = btn.closest('.btn-toggle');
-
-  // Single-select groups (range) -> only one true
-  if (btn.dataset.hmRange) {
-    group.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed', 'false'));
-    btn.setAttribute('aria-pressed', 'true');
-    return;
-  }
-
-  // Multi-select groups (categories), except "All"
-  if (btn.dataset.hmFilter === 'all') {
-    group.querySelectorAll('.chip').forEach(c => c.setAttribute('aria-pressed','false'));
-    btn.setAttribute('aria-pressed','true');
-  } else {
-    // toggle pressed
-    const pressed = btn.getAttribute('aria-pressed') === 'true';
-    btn.setAttribute('aria-pressed', pressed ? 'false' : 'true');
-    // ensure "All" turns off when any specific filter is on
-    const allBtn = group.querySelector('[data-hm-filter="all"]');
-    if (allBtn) allBtn.setAttribute('aria-pressed','false');
-  }
-});
-
 // SPECTRA ASK
 // SPECTRA ASK
 
@@ -1752,7 +1770,7 @@ async function askSpectra(q) {
   const box = $("askResult");
   if (!box) return;
   box.classList.remove("hidden");
-  box.innerHTML = `<div class="text-sm text-gray-400">Thinking…</div>`;
+  box.innerHTML = `<div class="inline-status"><i class="mdi mdi-home-search-outline" aria-hidden="true"></i><span>Checking your home…</span></div>`;
 
   try {
     const res = await fetch(api("ask"), {
@@ -1803,7 +1821,7 @@ async function askSpectra(q) {
 
   } catch (e) {
     console.error(e);
-    box.innerHTML = `<div class="text-red-400">Ask failed: ${e.message}</div>`;
+    box.innerHTML = `<div class="inline-status inline-status--error"><i class="mdi mdi-alert-circle-outline" aria-hidden="true"></i><span>We could not answer that just now. ${escapeHtml(e.message || "Please try again.")}</span></div>`;
   }
 }
 
@@ -1863,10 +1881,10 @@ async function openModal(row) {
   container.innerHTML = `
     <div class="modal-hero">
       <div class="hero-head">
-        <i class="mdi mdi-home-analytics-outline"></i><span>Loading…</span>
+        <i class="mdi mdi-home-analytics-outline"></i><span>Loading insight…</span>
       </div>
       <div class="hero-body">
-        Preparing view for this analysis. One moment…
+        Preparing the full view for this analysis. One moment…
       </div>
     </div>
   `;
@@ -2007,7 +2025,7 @@ async function openModal(row) {
   // Helper to render a feedback list
   function renderFbList(listEl, items) {
     if (!items || !items.length) {
-      listEl.innerHTML = "<div class='text-gray-400 text-sm'>No feedback yet.</div>";
+      listEl.innerHTML = "<div class='empty-state'><i class='mdi mdi-message-outline' aria-hidden='true'></i><span>No saved guidance for this item yet.</span></div>";
       return;
     }
     listEl.innerHTML = items.map(r => `
@@ -2251,7 +2269,7 @@ function renderFeedbackList(rows) {
   if (!box) return;
 
   if (!rows.length) {
-    box.innerHTML = "<div class='text-gray-400 text-sm'>No feedback found.</div>";
+    box.innerHTML = "<div class='empty-state'><i class='mdi mdi-message-text-outline' aria-hidden='true'></i><span>No saved guidance matched these filters.</span></div>";
     return;
   }
 
@@ -2302,7 +2320,7 @@ function renderFeedbackList(rows) {
         btn.closest("[data-id]")?.remove();
       } catch (e) {
         console.error(e);
-        alert("Failed to delete.");
+        alert("Could not delete guidance.");
       }
     });
   });
@@ -2378,12 +2396,12 @@ async function saveFeedbackEdit() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ note, kind })
     });
-    if (resEl) resEl.textContent = "Saved.";
+    if (resEl) resEl.textContent = "Changes saved.";
     await refreshFeedbackManager();
     setTimeout(() => document.getElementById("dlg-edit-feedback").close?.(), 400);
   } catch (e) {
     console.error(e);
-    if (resEl) resEl.textContent = "Failed to save.";
+    if (resEl) resEl.textContent = "Could not save changes.";
   }
 }
 
@@ -2394,12 +2412,12 @@ async function deleteFeedbackEdit() {
 
   try {
     await jsonFetch(api(`feedback/${id}`), { method: "DELETE" });
-    if (resEl) resEl.textContent = "Deleted.";
+    if (resEl) resEl.textContent = "Guidance deleted.";
     await refreshFeedbackManager();
     setTimeout(() => document.getElementById("dlg-edit-feedback").close?.(), 400);
   } catch (e) {
     console.error(e);
-    if (resEl) resEl.textContent = "Failed to delete.";
+    if (resEl) resEl.textContent = "Could not delete guidance.";
   }
 }
 
@@ -2411,7 +2429,6 @@ function initFeedbackManager() {
 
   if (btn) {
     btn.addEventListener("click", () => {
-      console.log("Opening Feedback Manager…");
       openFeedbackManager();
     });
   }
@@ -2466,8 +2483,8 @@ function closeModal() {
 // ---------- Init ----------
 function init() {
   // wire up buttons
-  $("toggleMode").addEventListener("click", toggleMode);
-  $("runAnalysis").addEventListener("click", runAnalysisNow);
+  $("toggleMode")?.addEventListener("click", toggleMode);
+  $("runAnalysis")?.addEventListener("click", runAnalysisNow);
   initFeedbackManager();
   initThemeToggle();
 
@@ -2483,17 +2500,25 @@ function init() {
     window._deviceChipHandlerBound = true;
   }
 
-  // initial loads
-  loadStatus().catch(console.error);
-  loadHistory().catch(console.error);
-  loadEvents().catch(console.error);   // 👈 new – load events into UI
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      stopPolling();
+      return;
+    }
+    refreshDashboard().catch(console.error);
+    startPolling();
+  });
 
-  // poll periodically
-  setInterval(() => {
-    loadStatus().catch(console.error);
-    loadHistory().catch(console.error);
-    loadEvents().catch(console.error); // 👈 keep events fresh
-  }, 100000);
+  window.addEventListener("focus", () => {
+    if (document.hidden) return;
+    refreshDashboard().catch(console.error);
+  }, { passive: true });
+
+  refreshDashboard().catch(console.error);
+  startPolling();
+  requestAnimationFrame(() => {
+    document.documentElement.classList.add("app-ready");
+  });
 }
 
 if (document.readyState === "loading") {

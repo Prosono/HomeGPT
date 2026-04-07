@@ -1,5 +1,5 @@
 :root {
-  --font-display: "Sora", "Avenir Next", "Segoe UI", sans-serif;
+  --font-display: "Outfit", "Avenir Next", "Segoe UI", sans-serif;
   --font-body: "Plus Jakarta Sans", "Segoe UI", sans-serif;
   --radius-xl: 1.75rem;
   --radius-lg: 1.2rem;
@@ -82,6 +82,7 @@
 
 html {
   color-scheme: light;
+  scroll-behavior: smooth;
   scrollbar-color: color-mix(in srgb, var(--accent) 42%, transparent) transparent;
 }
 
@@ -242,6 +243,20 @@ canvas {
     box-shadow 180ms ease;
 }
 
+.toolbar-btn:focus-visible,
+.secondary-btn:focus-visible,
+.primary-btn:focus-visible,
+.close-x:focus-visible,
+.opt:focus-visible,
+.chip:focus-visible,
+.quick-link:focus-visible,
+.mode-switch:focus-visible,
+.pager-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 0.28rem var(--focus);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+}
+
 .toolbar-btn:hover,
 .secondary-btn:hover,
 .primary-btn:hover,
@@ -345,6 +360,74 @@ canvas {
   gap: 1.25rem;
 }
 
+#ask-home,
+#energy-patterns,
+#signal-heatmap,
+#latest-analyses,
+#recent-signals {
+  scroll-margin-top: 1rem;
+}
+
+.quick-nav {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.8rem;
+  padding: 0.95rem;
+}
+
+.quick-link {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.9rem;
+  align-items: center;
+  min-height: 5.5rem;
+  padding: 1rem 1.05rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface) 98%, transparent), color-mix(in srgb, var(--surface-muted) 86%, transparent));
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background 180ms ease;
+}
+
+.quick-link:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+  box-shadow: var(--shadow-sm);
+}
+
+.quick-link-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 3rem;
+  height: 3rem;
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--accent-soft) 92%, transparent);
+  color: var(--accent);
+  font-size: 1.2rem;
+}
+
+.quick-link-copy {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.quick-link-copy strong {
+  font-family: var(--font-display);
+  font-size: 1.02rem;
+  letter-spacing: -0.03em;
+}
+
+.quick-link-copy span:last-child {
+  color: var(--text-muted);
+  line-height: 1.5;
+  font-size: 0.92rem;
+}
+
 .panel {
   position: relative;
   border: 1px solid var(--border);
@@ -367,6 +450,15 @@ canvas {
 .panel > * {
   position: relative;
   z-index: 1;
+}
+
+.chart-panel,
+.heatmap-panel,
+.timeline-panel,
+.analyses-panel,
+.events-panel {
+  content-visibility: auto;
+  contain-intrinsic-size: 480px;
 }
 
 .hero {
@@ -488,34 +580,94 @@ canvas {
     linear-gradient(160deg, color-mix(in srgb, var(--secondary-soft) 58%, transparent), color-mix(in srgb, var(--surface) 98%, transparent));
 }
 
-.hero-visual-grid {
+.hero-visual-head {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.75rem;
+  gap: 0.35rem;
+  margin-bottom: 0.85rem;
+}
+
+.hero-visual-head strong {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  letter-spacing: -0.03em;
+}
+
+.hero-visual-stage {
+  position: relative;
+  min-height: 16rem;
+  border-radius: 1.15rem;
+  background:
+    radial-gradient(circle at 20% 20%, color-mix(in srgb, var(--accent-soft) 72%, transparent), transparent 12rem),
+    linear-gradient(180deg, color-mix(in srgb, var(--surface) 90%, transparent), color-mix(in srgb, var(--surface-muted) 94%, transparent));
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.hero-wireframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
   height: 100%;
 }
 
-.hero-visual-card {
-  display: grid;
-  gap: 0.55rem;
-  align-content: center;
-  padding: 1rem;
-  min-height: 7rem;
-  border-radius: 1rem;
-  background: color-mix(in srgb, var(--surface) 78%, transparent);
+.hero-wireframe rect,
+.hero-wireframe path {
+  stroke: color-mix(in srgb, var(--text-soft) 45%, transparent);
+  stroke-width: 2.2;
+  fill: none;
+}
+
+.hero-wireframe circle {
+  fill: color-mix(in srgb, var(--accent) 76%, white 10%);
+  stroke: color-mix(in srgb, var(--surface) 86%, transparent);
+  stroke-width: 5;
+}
+
+.signal-pill {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.55rem 0.8rem;
+  border-radius: 999px;
   border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: var(--shadow-sm);
+  font-size: 0.82rem;
   font-weight: 700;
+  animation: signal-float 7s ease-in-out infinite;
 }
 
-.hero-visual-card i {
-  font-size: 1.3rem;
-  color: var(--accent);
+.signal-pill i {
+  font-size: 1rem;
 }
 
-.hero-visual-card--wide {
-  grid-column: 1 / -1;
-  min-height: 5.5rem;
+.signal-pill--energy {
+  top: 1rem;
+  right: 1rem;
+}
+
+.signal-pill--comfort {
+  left: 1rem;
+  bottom: 1rem;
+}
+
+.signal-pill--security {
+  right: 1.25rem;
+  bottom: 1.1rem;
+}
+
+.signal-pill--energy i { color: var(--warning); }
+.signal-pill--comfort i { color: var(--secondary); }
+.signal-pill--security i { color: var(--danger); }
+
+.signal-pill--comfort { animation-delay: 1.2s; }
+.signal-pill--security { animation-delay: 2.2s; }
+
+.hero-visual-foot {
+  margin-top: 0.8rem;
   color: var(--text-muted);
+  line-height: 1.55;
 }
 
 .metric-label {
@@ -648,6 +800,34 @@ canvas {
   border-radius: 1rem;
   background: color-mix(in srgb, var(--surface-muted) 92%, transparent);
   border: 1px solid var(--border);
+}
+
+.inline-status,
+.empty-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.inline-status i,
+.empty-state i {
+  color: var(--accent);
+  font-size: 1rem;
+}
+
+.inline-status--error {
+  color: var(--danger);
+}
+
+.inline-status--error i {
+  color: var(--danger);
+}
+
+.empty-state {
+  width: 100%;
+  padding: 0.95rem 0;
 }
 
 .ask-answer,
@@ -931,6 +1111,17 @@ canvas {
 
 .preview-card:hover {
   border-color: var(--border-strong);
+}
+
+.preview-card,
+.event-row,
+.metric-card,
+.timeline-entry,
+.chart-card,
+.hero-visual,
+.heat-card,
+.heat-controls {
+  will-change: transform;
 }
 
 .preview-head,
@@ -1409,6 +1600,41 @@ canvas {
   color: var(--accent);
 }
 
+@keyframes signal-float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-4px);
+  }
+}
+
+html:not(.app-ready) .topbar,
+html:not(.app-ready) .hero,
+html:not(.app-ready) .quick-nav,
+html:not(.app-ready) .intro-grid,
+html:not(.app-ready) .workspace {
+  opacity: 0;
+  transform: translateY(12px);
+}
+
+html.app-ready .topbar,
+html.app-ready .hero,
+html.app-ready .quick-nav,
+html.app-ready .intro-grid,
+html.app-ready .workspace {
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity 420ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html.app-ready .hero { transition-delay: 60ms; }
+html.app-ready .quick-nav { transition-delay: 110ms; }
+html.app-ready .intro-grid { transition-delay: 160ms; }
+html.app-ready .workspace { transition-delay: 210ms; }
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -1424,6 +1650,7 @@ canvas {
 @media (max-width: 1180px) {
   .topbar,
   .hero,
+  .quick-nav,
   .intro-grid,
   .workspace,
   .heat-wrap,
@@ -1461,11 +1688,16 @@ canvas {
     width: min(100vw - 1rem, 100%);
   }
 
+  .quick-link {
+    min-height: auto;
+  }
+
   .hero-copy h1 {
     max-width: none;
   }
 
   .hero-metrics,
+  .quick-nav,
   .history-options,
   .form-grid,
   .fbm-controls {
@@ -1491,6 +1723,25 @@ canvas {
   .btn-toggle > * {
     flex: 1 1 auto;
   }
+
+  .signal-pill {
+    position: static;
+    margin: 0.75rem 0 0;
+  }
+
+  .hero-visual-stage {
+    display: flex;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 0.5rem;
+    padding: 0.75rem;
+  }
+
+  .hero-wireframe {
+    position: relative;
+    flex: 1 0 100%;
+    min-height: 10rem;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1500,5 +1751,18 @@ canvas {
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;
+  }
+
+  .signal-pill,
+  .quick-link,
+  .preview-card,
+  .event-row,
+  .metric-card,
+  .timeline-entry,
+  .chart-card,
+  .hero-visual,
+  .heat-card,
+  .heat-controls {
+    will-change: auto;
   }
 }

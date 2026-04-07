@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
-    href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@500;600;700;800&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
     rel="stylesheet"
   />
   <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin />
@@ -27,7 +27,7 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
   <link rel="stylesheet" href="https://cdn.materialdesignicons.com/7.2.96/css/materialdesignicons.min.css" />
-  <link rel="stylesheet" href="static/style.css?v=0.1.7" />
+  <link rel="stylesheet" href="static/style.css?v=0.1.9" />
 
   <style>
     dialog:not([open]) { display: none; }
@@ -53,7 +53,7 @@
           <span class="eyebrow"><i class="mdi mdi-home-analytics" aria-hidden="true"></i> Smart home intelligence</span>
           <strong>HomeGPT</strong>
           <span class="brand-subline">A clearer view of energy, comfort, safety, and what needs attention.</span>
-          <span class="build-badge">Build 0.1.7</span>
+          <span class="build-badge">Build 0.1.9</span>
         </div>
       </a>
 
@@ -74,7 +74,7 @@
 
         <button id="runAnalysis" class="primary-btn" type="button">
           <i class="mdi mdi-play-circle-outline" aria-hidden="true"></i>
-          <span>Run fresh analysis</span>
+          <span>Refresh insights</span>
         </button>
       </div>
     </header>
@@ -106,7 +106,7 @@
           <div class="hero-actions">
             <button id="btn-analyze-history" class="secondary-btn" type="button">
               <i class="mdi mdi-history" aria-hidden="true"></i>
-              <span>Compare history</span>
+              <span>Run longer review</span>
             </button>
             <button
               id="btn-manage-feedback"
@@ -116,7 +116,7 @@
               aria-controls="dlg-manage-feedback"
             >
               <i class="mdi mdi-message-draw" aria-hidden="true"></i>
-              <span>Manage feedback</span>
+              <span>Saved guidance</span>
             </button>
           </div>
 
@@ -133,23 +133,23 @@
                 style="width: 0%"
               ></div>
             </div>
-            <span class="progress-caption">Fresh analysis updates this workspace and resets the buffered event count.</span>
+            <span class="progress-caption">A fresh analysis updates the overview, charts, and recent signals.</span>
           </div>
         </div>
 
         <div class="hero-metrics">
           <article class="metric-card">
             <div class="metric-icon"><i class="mdi mdi-bell-badge-outline" aria-hidden="true"></i></div>
-            <span class="metric-label">Buffered events</span>
-            <strong id="eventCount">0 buffered events</strong>
-            <span class="metric-note">Signals waiting to be folded into the next analysis.</span>
+            <span class="metric-label">Signals ready</span>
+            <strong id="eventCount">0 signals ready</strong>
+            <span class="metric-note">Recent changes waiting to be included in the next review.</span>
           </article>
 
           <article class="metric-card">
             <div class="metric-icon"><i class="mdi mdi-timeline-clock-outline" aria-hidden="true"></i></div>
-            <span class="metric-label">Last analysis</span>
-            <strong id="sinceLast">No analysis yet</strong>
-            <span class="metric-note" id="lastAnalysisStamp">Run a fresh analysis to populate the dashboard.</span>
+            <span class="metric-label">Latest review</span>
+            <strong id="sinceLast">No review yet</strong>
+            <span class="metric-note" id="lastAnalysisStamp">Run a review to start filling the dashboard.</span>
           </article>
 
           <article class="metric-card">
@@ -161,47 +161,94 @@
 
           <article class="metric-card">
             <div class="metric-icon"><i class="mdi mdi-shield-check-outline" aria-hidden="true"></i></div>
-            <span class="metric-label">Safety mode</span>
+            <span class="metric-label">Control safety</span>
             <strong id="dryRunState">Dry run on</strong>
             <span class="metric-note">Keeps control proposals safe until live control is enabled.</span>
           </article>
 
           <article class="metric-card">
             <div class="metric-icon"><i class="mdi mdi-chart-timeline-variant" aria-hidden="true"></i></div>
-            <span class="metric-label">History window</span>
+            <span class="metric-label">Default lookback</span>
             <strong id="historyWindow">6h</strong>
             <span class="metric-note">Default window used when the home is reviewed automatically.</span>
           </article>
 
-          <article class="hero-visual">
-            <div class="hero-visual-grid" aria-hidden="true">
-              <div class="hero-visual-card">
-                <i class="mdi mdi-lightning-bolt-circle"></i>
-                <span>Energy</span>
+          <article class="hero-visual" aria-label="Home overview illustration">
+            <div class="hero-visual-head">
+              <span class="eyebrow"><i class="mdi mdi-vector-square" aria-hidden="true"></i> Live signal map</span>
+              <strong>One view across the home</strong>
+            </div>
+            <div class="hero-visual-stage">
+              <svg class="hero-wireframe" viewBox="0 0 420 250" role="img" aria-label="Illustrated home signal map">
+                <rect x="38" y="32" width="344" height="184" rx="18" />
+                <path d="M150 32V216" />
+                <path d="M260 32V216" />
+                <path d="M38 116H382" />
+                <circle cx="92" cy="82" r="11" />
+                <circle cx="207" cy="82" r="11" />
+                <circle cx="320" cy="82" r="11" />
+                <circle cx="92" cy="168" r="11" />
+                <circle cx="207" cy="168" r="11" />
+                <circle cx="320" cy="168" r="11" />
+              </svg>
+
+              <div class="signal-pill signal-pill--energy">
+                <i class="mdi mdi-flash-outline" aria-hidden="true"></i>
+                <span>Peak load</span>
               </div>
-              <div class="hero-visual-card">
-                <i class="mdi mdi-sofa-outline"></i>
-                <span>Comfort</span>
+              <div class="signal-pill signal-pill--comfort">
+                <i class="mdi mdi-home-thermometer-outline" aria-hidden="true"></i>
+                <span>Comfort drift</span>
               </div>
-              <div class="hero-visual-card">
-                <i class="mdi mdi-shield-home-outline"></i>
-                <span>Security</span>
+              <div class="signal-pill signal-pill--security">
+                <i class="mdi mdi-shield-alert-outline" aria-hidden="true"></i>
+                <span>Open entry</span>
               </div>
-              <div class="hero-visual-card hero-visual-card--wide">
-                <i class="mdi mdi-chart-box-outline"></i>
-                <span>Simple insights, interactive history, and clear next steps.</span>
-              </div>
+            </div>
+            <div class="hero-visual-foot">
+              Energy, comfort, and safety signals are easier to compare when the interface stays simple.
             </div>
           </article>
         </div>
       </section>
 
+      <nav class="quick-nav panel" aria-label="Quick navigation">
+        <a class="quick-link" href="#energy-patterns">
+          <span class="quick-link-icon"><i class="mdi mdi-flash-outline" aria-hidden="true"></i></span>
+          <span class="quick-link-copy">
+            <strong>Energy overview</strong>
+            <span>Start with load, usage, and repeated peaks.</span>
+          </span>
+        </a>
+        <a class="quick-link" href="#signal-heatmap">
+          <span class="quick-link-icon"><i class="mdi mdi-heat-wave" aria-hidden="true"></i></span>
+          <span class="quick-link-copy">
+            <strong>Busy hours</strong>
+            <span>See when issues cluster and intensify.</span>
+          </span>
+        </a>
+        <a class="quick-link" href="#latest-analyses">
+          <span class="quick-link-icon"><i class="mdi mdi-view-module-outline" aria-hidden="true"></i></span>
+          <span class="quick-link-copy">
+            <strong>Latest reviews</strong>
+            <span>Open the newest findings and follow-ups.</span>
+          </span>
+        </a>
+        <a class="quick-link" href="#recent-signals">
+          <span class="quick-link-icon"><i class="mdi mdi-radar" aria-hidden="true"></i></span>
+          <span class="quick-link-copy">
+            <strong>Recent signals</strong>
+            <span>Inspect the changes behind the latest insight.</span>
+          </span>
+        </a>
+      </nav>
+
       <section class="intro-grid">
-        <section class="panel ask-panel">
+        <section class="panel ask-panel" id="ask-home">
           <div class="section-head">
             <div>
               <h2><i class="mdi mdi-forum-outline" aria-hidden="true"></i> Ask about your home</h2>
-              <p>Ask one direct question and get a direct answer based on recent data and analyses.</p>
+              <p>Ask one focused question and get a direct answer based on recent events and analyses.</p>
             </div>
           </div>
 
@@ -210,7 +257,7 @@
             <input
               id="askInput"
               class="ask-input"
-              placeholder="Ask about energy use, temperature trends, open doors, or what deserves attention."
+              placeholder="Ask what changed, what uses the most energy, or what should be fixed."
             />
             <button id="askSend" class="primary-btn primary-btn--compact" type="button">Ask HomeGPT</button>
           </div>
@@ -221,23 +268,23 @@
         <aside class="panel guidance-panel">
           <div class="section-head">
             <div>
-              <h2><i class="mdi mdi-star-four-points-outline" aria-hidden="true"></i> Start here</h2>
-              <p>The dashboard is ordered to make the most useful checks obvious.</p>
+              <h2><i class="mdi mdi-compass-outline" aria-hidden="true"></i> Read this page</h2>
+              <p>The layout is intentionally simple so the most useful checks come first.</p>
             </div>
           </div>
 
           <ul class="guidance-list">
-            <li><i class="mdi mdi-chart-line" aria-hidden="true"></i><span>Use the charts to spot load peaks and repeated categories first.</span></li>
-            <li><i class="mdi mdi-grid" aria-hidden="true"></i><span>Use the heatmap to find the hours where issues cluster.</span></li>
-            <li><i class="mdi mdi-bell-outline" aria-hidden="true"></i><span>Open recent signals to see what triggered the latest insights.</span></li>
-            <li><i class="mdi mdi-message-badge-outline" aria-hidden="true"></i><span>Save feedback when the system should interpret something differently.</span></li>
+            <li><i class="mdi mdi-chart-line" aria-hidden="true"></i><span>Start with the charts to see where energy and recurring issues rise first.</span></li>
+            <li><i class="mdi mdi-grid" aria-hidden="true"></i><span>Use the heatmap to pinpoint the hours where patterns keep returning.</span></li>
+            <li><i class="mdi mdi-bell-outline" aria-hidden="true"></i><span>Open recent signals when you want the events behind the latest recommendation.</span></li>
+            <li><i class="mdi mdi-message-badge-outline" aria-hidden="true"></i><span>Save guidance when HomeGPT should learn a better interpretation for your home.</span></li>
           </ul>
         </aside>
       </section>
 
       <section class="workspace">
         <div class="main-stack">
-          <section class="panel chart-panel">
+          <section class="panel chart-panel" id="energy-patterns">
             <div class="section-head">
               <div>
                 <h2><i class="mdi mdi-chart-areaspline" aria-hidden="true"></i> Energy and activity patterns</h2>
@@ -270,7 +317,7 @@
             </div>
           </section>
 
-          <section class="panel heatmap-panel" aria-labelledby="heatmap-title">
+          <section class="panel heatmap-panel" id="signal-heatmap" aria-labelledby="heatmap-title">
             <div class="section-head">
               <div>
                 <h2 id="heatmap-title"><i class="mdi mdi-heat-wave" aria-hidden="true"></i> Signal heatmap</h2>
@@ -338,7 +385,7 @@
             <div id="analysisTimeline" class="analysis-timeline"></div>
           </section>
 
-          <section class="panel analyses-panel" aria-labelledby="analyses-title">
+          <section class="panel analyses-panel" id="latest-analyses" aria-labelledby="analyses-title">
             <div class="section-head">
               <div>
                 <h2 id="analyses-title"><i class="mdi mdi-view-module-outline" aria-hidden="true"></i> Latest analyses</h2>
@@ -351,7 +398,7 @@
         </div>
 
         <aside class="side-stack">
-          <section class="panel events-panel" aria-labelledby="events-title">
+          <section class="panel events-panel" id="recent-signals" aria-labelledby="events-title">
             <div class="section-head">
               <div>
                 <h2 id="events-title"><i class="mdi mdi-radar" aria-hidden="true"></i> Recent signals</h2>
@@ -568,6 +615,6 @@
     })();
   </script>
 
-  <script src="static/app.js?v=0.1.7" defer></script>
+  <script src="static/app.js?v=0.1.9" defer></script>
 </body>
 </html>
