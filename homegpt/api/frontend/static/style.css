@@ -1,77 +1,77 @@
 :root {
-  --font-display: "Fraunces", "Georgia", serif;
-  --font-body: "Manrope", "Avenir Next", "Segoe UI", sans-serif;
+  --font-display: "Sora", "Avenir Next", "Segoe UI", sans-serif;
+  --font-body: "Plus Jakarta Sans", "Segoe UI", sans-serif;
   --radius-xl: 1.75rem;
   --radius-lg: 1.2rem;
   --radius-md: 0.95rem;
   --radius-sm: 0.75rem;
-  --shadow-lg: 0 28px 80px rgba(15, 23, 35, 0.14);
-  --shadow-md: 0 18px 44px rgba(15, 23, 35, 0.1);
-  --shadow-sm: 0 10px 24px rgba(15, 23, 35, 0.08);
+  --shadow-lg: 0 30px 70px rgba(3, 10, 28, 0.12);
+  --shadow-md: 0 20px 40px rgba(3, 10, 28, 0.09);
+  --shadow-sm: 0 10px 22px rgba(3, 10, 28, 0.07);
 }
 
 :root[data-theme="light"] {
-  --bg: #f3eee5;
-  --bg-accent: rgba(173, 128, 67, 0.08);
-  --surface: rgba(255, 251, 245, 0.92);
-  --surface-strong: rgba(252, 247, 239, 0.98);
-  --surface-muted: rgba(247, 240, 228, 0.78);
-  --border: rgba(63, 50, 36, 0.12);
-  --border-strong: rgba(63, 50, 36, 0.18);
-  --text: #1f2328;
-  --text-muted: #5d625f;
-  --text-soft: #7b817f;
-  --accent: #a96c28;
-  --accent-strong: #7d4a11;
-  --accent-soft: rgba(169, 108, 40, 0.14);
-  --secondary: #2f6a72;
-  --secondary-soft: rgba(47, 106, 114, 0.14);
-  --success: #42735d;
-  --warning: #b17625;
-  --danger: #a3493f;
-  --focus: rgba(66, 115, 93, 0.26);
-  --chip-bg: rgba(63, 50, 36, 0.06);
-  --line: rgba(63, 50, 36, 0.08);
-  --overlay: rgba(28, 24, 20, 0.38);
-  --chart-grid: rgba(63, 50, 36, 0.09);
-  --chart-text: rgba(31, 35, 40, 0.82);
-  --chart-energy: #3d7a69;
-  --chart-power: #7d4a11;
-  --chart-security: #a3493f;
-  --chart-comfort: #c4802f;
-  --chart-anomaly: #6a5690;
+  --bg: #eef4fb;
+  --bg-accent: rgba(37, 99, 235, 0.08);
+  --surface: rgba(255, 255, 255, 0.94);
+  --surface-strong: rgba(255, 255, 255, 0.99);
+  --surface-muted: rgba(244, 248, 253, 0.92);
+  --border: rgba(15, 23, 42, 0.08);
+  --border-strong: rgba(15, 23, 42, 0.15);
+  --text: #0f172a;
+  --text-muted: #475569;
+  --text-soft: #64748b;
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
+  --accent-soft: rgba(37, 99, 235, 0.12);
+  --secondary: #0891b2;
+  --secondary-soft: rgba(8, 145, 178, 0.12);
+  --success: #0f766e;
+  --warning: #d97706;
+  --danger: #dc2626;
+  --focus: rgba(37, 99, 235, 0.18);
+  --chip-bg: rgba(15, 23, 42, 0.04);
+  --line: rgba(15, 23, 42, 0.07);
+  --overlay: rgba(8, 15, 31, 0.32);
+  --chart-grid: rgba(15, 23, 42, 0.08);
+  --chart-text: rgba(15, 23, 42, 0.7);
+  --chart-energy: #0f766e;
+  --chart-power: #2563eb;
+  --chart-security: #dc2626;
+  --chart-comfort: #ea580c;
+  --chart-anomaly: #7c3aed;
 }
 
 :root[data-theme="dark"] {
-  --bg: #131517;
-  --bg-accent: rgba(192, 150, 96, 0.08);
-  --surface: rgba(28, 31, 35, 0.92);
-  --surface-strong: rgba(31, 34, 39, 0.98);
-  --surface-muted: rgba(39, 43, 48, 0.82);
-  --border: rgba(235, 225, 209, 0.09);
-  --border-strong: rgba(235, 225, 209, 0.16);
-  --text: #f1ece3;
-  --text-muted: #b9b0a3;
-  --text-soft: #91897d;
-  --accent: #cf9861;
-  --accent-strong: #e8c08c;
-  --accent-soft: rgba(207, 152, 97, 0.15);
-  --secondary: #78aab1;
-  --secondary-soft: rgba(120, 170, 177, 0.14);
-  --success: #8ac8a5;
-  --warning: #e0b35f;
-  --danger: #d18378;
-  --focus: rgba(138, 200, 165, 0.22);
-  --chip-bg: rgba(255, 255, 255, 0.05);
-  --line: rgba(255, 255, 255, 0.06);
-  --overlay: rgba(8, 10, 12, 0.7);
-  --chart-grid: rgba(255, 255, 255, 0.08);
-  --chart-text: rgba(241, 236, 227, 0.78);
-  --chart-energy: #8ac8a5;
-  --chart-power: #e8c08c;
-  --chart-security: #e69285;
-  --chart-comfort: #f0bf69;
-  --chart-anomaly: #b8a1e8;
+  --bg: #07111f;
+  --bg-accent: rgba(59, 130, 246, 0.12);
+  --surface: rgba(12, 23, 42, 0.93);
+  --surface-strong: rgba(10, 20, 36, 0.98);
+  --surface-muted: rgba(19, 32, 57, 0.92);
+  --border: rgba(148, 163, 184, 0.14);
+  --border-strong: rgba(148, 163, 184, 0.22);
+  --text: #e5eefb;
+  --text-muted: #9fb0c8;
+  --text-soft: #7f95b5;
+  --accent: #4f8cff;
+  --accent-strong: #2563eb;
+  --accent-soft: rgba(79, 140, 255, 0.16);
+  --secondary: #22c1dc;
+  --secondary-soft: rgba(34, 193, 220, 0.16);
+  --success: #14b8a6;
+  --warning: #f59e0b;
+  --danger: #fb7185;
+  --focus: rgba(79, 140, 255, 0.22);
+  --chip-bg: rgba(255, 255, 255, 0.04);
+  --line: rgba(148, 163, 184, 0.1);
+  --overlay: rgba(3, 7, 18, 0.72);
+  --chart-grid: rgba(148, 163, 184, 0.12);
+  --chart-text: rgba(229, 238, 251, 0.72);
+  --chart-energy: #14b8a6;
+  --chart-power: #60a5fa;
+  --chart-security: #fb7185;
+  --chart-comfort: #f59e0b;
+  --chart-anomaly: #a78bfa;
 }
 
 *,
@@ -95,8 +95,8 @@ body {
   font-family: var(--font-body);
   color: var(--text);
   background:
-    radial-gradient(circle at top left, var(--bg-accent), transparent 28rem),
-    radial-gradient(circle at bottom right, color-mix(in srgb, var(--secondary) 10%, transparent), transparent 32rem),
+    radial-gradient(circle at top left, var(--bg-accent), transparent 24rem),
+    radial-gradient(circle at bottom right, color-mix(in srgb, var(--secondary) 10%, transparent), transparent 26rem),
     linear-gradient(180deg, color-mix(in srgb, var(--bg) 94%, #fff 6%), var(--bg));
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -107,11 +107,10 @@ body::before {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background-image:
-    linear-gradient(to right, transparent 0, transparent calc(100% - 1px), rgba(255, 255, 255, 0.02) calc(100% - 1px)),
-    linear-gradient(to bottom, transparent 0, transparent calc(100% - 1px), rgba(255, 255, 255, 0.02) calc(100% - 1px));
-  background-size: 72px 72px;
-  opacity: 0.25;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 32%),
+    linear-gradient(315deg, color-mix(in srgb, var(--secondary) 8%, transparent), transparent 38%);
+  opacity: 0.55;
 }
 
 img {
@@ -188,7 +187,7 @@ canvas {
 .brand-subline {
   max-width: 46ch;
   color: var(--text-soft);
-  font-size: 0.96rem;
+  font-size: 0.92rem;
 }
 
 .build-badge {
@@ -196,12 +195,12 @@ canvas {
   align-items: center;
   width: fit-content;
   margin-top: 0.45rem;
-  padding: 0.35rem 0.65rem;
+  padding: 0.28rem 0.58rem;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
   color: var(--text-soft);
-  font-size: 0.76rem;
+  font-size: 0.7rem;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -233,7 +232,7 @@ canvas {
 .opt {
   appearance: none;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 1rem;
   background: color-mix(in srgb, var(--surface) 82%, transparent);
   color: var(--text);
   transition:
@@ -269,14 +268,14 @@ canvas {
 }
 
 .primary-btn {
-  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 92%, white 8%), var(--accent-strong));
-  color: #fffaf2;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 92%, white 8%), color-mix(in srgb, var(--secondary) 28%, var(--accent-strong)));
+  color: #f8fbff;
   border-color: transparent;
-  box-shadow: 0 18px 38px color-mix(in srgb, var(--accent) 30%, transparent);
+  box-shadow: 0 16px 30px color-mix(in srgb, var(--accent) 24%, transparent);
 }
 
 .primary-btn:hover {
-  box-shadow: 0 22px 42px color-mix(in srgb, var(--accent) 40%, transparent);
+  box-shadow: 0 18px 34px color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
 .primary-btn--compact,
@@ -289,7 +288,7 @@ canvas {
   min-width: 15rem;
   padding: 0.95rem 1.1rem;
   border: 1px solid var(--border);
-  border-radius: 1.25rem;
+  border-radius: 1.1rem;
   background: color-mix(in srgb, var(--surface) 88%, transparent);
   color: var(--text);
   display: grid;
@@ -350,7 +349,7 @@ canvas {
   position: relative;
   border: 1px solid var(--border);
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--surface-strong) 86%, transparent), color-mix(in srgb, var(--surface) 96%, transparent));
+    linear-gradient(180deg, color-mix(in srgb, var(--surface-strong) 94%, transparent), color-mix(in srgb, var(--surface) 98%, transparent));
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
@@ -361,8 +360,8 @@ canvas {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(145deg, color-mix(in srgb, var(--accent-soft) 55%, transparent), transparent 38%);
-  opacity: 0.75;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--accent-soft) 40%, transparent), transparent 30%);
+  opacity: 0.55;
 }
 
 .panel > * {
@@ -386,18 +385,38 @@ canvas {
 .hero-copy h1 {
   margin: 0;
   font-family: var(--font-display);
-  font-size: clamp(2.2rem, 5vw, 4.4rem);
-  line-height: 0.98;
-  letter-spacing: -0.055em;
-  max-width: 11ch;
+  font-size: clamp(2.35rem, 4.8vw, 4rem);
+  line-height: 0.96;
+  letter-spacing: -0.06em;
+  max-width: 10ch;
 }
 
 .hero-copy p {
   margin: 0;
   color: var(--text-muted);
-  font-size: 1.02rem;
-  line-height: 1.7;
-  max-width: 58ch;
+  font-size: 1rem;
+  line-height: 1.65;
+  max-width: 54ch;
+}
+
+.hero-summary-list {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.hero-summary-item {
+  display: grid;
+  grid-template-columns: 1.4rem minmax(0, 1fr);
+  gap: 0.7rem;
+  align-items: start;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.hero-summary-item i {
+  color: var(--accent);
+  font-size: 1.1rem;
+  margin-top: 0.1rem;
 }
 
 .hero-actions {
@@ -440,7 +459,7 @@ canvas {
 
 .metric-card {
   display: grid;
-  gap: 0.45rem;
+  gap: 0.5rem;
   align-content: start;
   min-height: 9rem;
   padding: 1rem;
@@ -449,8 +468,54 @@ canvas {
   border: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
 }
 
-.metric-card--soft {
-  background: linear-gradient(145deg, color-mix(in srgb, var(--secondary-soft) 55%, transparent), color-mix(in srgb, var(--surface) 96%, transparent));
+.metric-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 0.95rem;
+  background: color-mix(in srgb, var(--accent-soft) 90%, transparent);
+  color: var(--accent);
+  font-size: 1.15rem;
+}
+
+.hero-visual {
+  padding: 1rem;
+  border-radius: var(--radius-lg);
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  background:
+    linear-gradient(160deg, color-mix(in srgb, var(--secondary-soft) 58%, transparent), color-mix(in srgb, var(--surface) 98%, transparent));
+}
+
+.hero-visual-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  height: 100%;
+}
+
+.hero-visual-card {
+  display: grid;
+  gap: 0.55rem;
+  align-content: center;
+  padding: 1rem;
+  min-height: 7rem;
+  border-radius: 1rem;
+  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  border: 1px solid var(--border);
+  font-weight: 700;
+}
+
+.hero-visual-card i {
+  font-size: 1.3rem;
+  color: var(--accent);
+}
+
+.hero-visual-card--wide {
+  grid-column: 1 / -1;
+  min-height: 5.5rem;
+  color: var(--text-muted);
 }
 
 .metric-label {
@@ -518,6 +583,11 @@ canvas {
   font-family: var(--font-display);
   font-size: clamp(1.35rem, 2vw, 1.8rem);
   letter-spacing: -0.04em;
+}
+
+.section-head h2 i {
+  color: var(--accent);
+  margin-right: 0.35rem;
 }
 
 .section-head p,
@@ -609,22 +679,18 @@ canvas {
 }
 
 .guidance-list li {
-  position: relative;
-  padding-left: 1.4rem;
+  display: grid;
+  grid-template-columns: 1.2rem minmax(0, 1fr);
+  gap: 0.7rem;
+  align-items: start;
   color: var(--text-muted);
   line-height: 1.65;
 }
 
-.guidance-list li::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0.62rem;
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 999px;
-  background: var(--accent);
-  box-shadow: 0 0 0 0.32rem color-mix(in srgb, var(--accent) 18%, transparent);
+.guidance-list li i {
+  color: var(--accent);
+  font-size: 1rem;
+  margin-top: 0.2rem;
 }
 
 .chart-grid {
@@ -646,7 +712,7 @@ canvas {
   height: 20rem;
   border-radius: 1rem;
   padding: 0.8rem;
-  background: color-mix(in srgb, var(--bg) 28%, var(--surface) 72%);
+  background: color-mix(in srgb, var(--bg) 36%, var(--surface) 64%);
   border: 1px solid var(--border);
 }
 
@@ -923,7 +989,7 @@ canvas {
   flex: 0 0 8rem;
   min-height: 3rem;
   border-radius: 0.9rem;
-  background: color-mix(in srgb, var(--bg) 24%, var(--surface) 76%);
+  background: color-mix(in srgb, var(--bg) 30%, var(--surface) 70%);
   border: 1px solid var(--border);
   padding: 0.4rem;
 }

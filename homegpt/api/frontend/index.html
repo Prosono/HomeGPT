@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
-    href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Manrope:wght@400;500;600;700;800&display=swap"
+    href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Sora:wght@500;600;700;800&display=swap"
     rel="stylesheet"
   />
   <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin />
@@ -27,7 +27,7 @@
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js" defer></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
   <link rel="stylesheet" href="https://cdn.materialdesignicons.com/7.2.96/css/materialdesignicons.min.css" />
-  <link rel="stylesheet" href="static/style.css?v=0.1.6" />
+  <link rel="stylesheet" href="static/style.css?v=0.1.7" />
 
   <style>
     dialog:not([open]) { display: none; }
@@ -50,10 +50,10 @@
           />
         </picture>
         <div class="brand-copy">
-          <span class="eyebrow">Smart home intelligence</span>
+          <span class="eyebrow"><i class="mdi mdi-home-analytics" aria-hidden="true"></i> Smart home intelligence</span>
           <strong>HomeGPT</strong>
-          <span class="brand-subline">Premium insight into energy, comfort, safety, and daily patterns.</span>
-          <span class="build-badge">Build 0.1.6</span>
+          <span class="brand-subline">A clearer view of energy, comfort, safety, and what needs attention.</span>
+          <span class="build-badge">Build 0.1.7</span>
         </div>
       </a>
 
@@ -82,17 +82,31 @@
     <main class="dashboard">
       <section class="hero panel">
         <div class="hero-copy">
-          <span class="eyebrow">Home overview</span>
-          <h1>Understand what matters in your home before it becomes a problem.</h1>
+          <span class="eyebrow"><i class="mdi mdi-view-dashboard-outline" aria-hidden="true"></i> At a glance</span>
+          <h1>See what matters in your home in seconds.</h1>
           <p id="overviewLead">
-            HomeGPT collects events, trends, and recommendations into one calm workspace so you can spot waste,
-            comfort drift, and unusual behavior quickly.
+            Energy use, comfort drift, unusual activity, and practical next steps are gathered into one clear workspace.
           </p>
+
+          <div class="hero-summary-list">
+            <div class="hero-summary-item">
+              <i class="mdi mdi-flash-outline" aria-hidden="true"></i>
+              <span>Track where energy peaks happen and when they repeat.</span>
+            </div>
+            <div class="hero-summary-item">
+              <i class="mdi mdi-home-thermometer-outline" aria-hidden="true"></i>
+              <span>Catch comfort changes before they become noticeable problems.</span>
+            </div>
+            <div class="hero-summary-item">
+              <i class="mdi mdi-shield-alert-outline" aria-hidden="true"></i>
+              <span>Understand the signals behind alerts, anomalies, and recommendations.</span>
+            </div>
+          </div>
 
           <div class="hero-actions">
             <button id="btn-analyze-history" class="secondary-btn" type="button">
               <i class="mdi mdi-history" aria-hidden="true"></i>
-              <span>Review history</span>
+              <span>Compare history</span>
             </button>
             <button
               id="btn-manage-feedback"
@@ -102,7 +116,7 @@
               aria-controls="dlg-manage-feedback"
             >
               <i class="mdi mdi-message-draw" aria-hidden="true"></i>
-              <span>Feedback library</span>
+              <span>Manage feedback</span>
             </button>
           </div>
 
@@ -125,39 +139,59 @@
 
         <div class="hero-metrics">
           <article class="metric-card">
+            <div class="metric-icon"><i class="mdi mdi-bell-badge-outline" aria-hidden="true"></i></div>
             <span class="metric-label">Buffered events</span>
             <strong id="eventCount">0 buffered events</strong>
-            <span class="metric-note">Waiting for the next analysis pass</span>
+            <span class="metric-note">Signals waiting to be folded into the next analysis.</span>
           </article>
 
           <article class="metric-card">
-            <span class="metric-label">Last completed analysis</span>
+            <div class="metric-icon"><i class="mdi mdi-timeline-clock-outline" aria-hidden="true"></i></div>
+            <span class="metric-label">Last analysis</span>
             <strong id="sinceLast">No analysis yet</strong>
-            <span class="metric-note" id="lastAnalysisStamp">Run a fresh analysis to populate the dashboard</span>
+            <span class="metric-note" id="lastAnalysisStamp">Run a fresh analysis to populate the dashboard.</span>
           </article>
 
           <article class="metric-card">
+            <div class="metric-icon"><i class="mdi mdi-robot-outline" aria-hidden="true"></i></div>
             <span class="metric-label">Model</span>
             <strong id="modelName">gpt-5</strong>
-            <span class="metric-note">Used for summaries, insights, and answers</span>
+            <span class="metric-note">Used for summaries, answers, and recommendations.</span>
           </article>
 
           <article class="metric-card">
-            <span class="metric-label">Safety rail</span>
+            <div class="metric-icon"><i class="mdi mdi-shield-check-outline" aria-hidden="true"></i></div>
+            <span class="metric-label">Safety mode</span>
             <strong id="dryRunState">Dry run on</strong>
-            <span class="metric-note">Actions stay safe until you explicitly allow live control</span>
+            <span class="metric-note">Keeps control proposals safe until live control is enabled.</span>
           </article>
 
           <article class="metric-card">
+            <div class="metric-icon"><i class="mdi mdi-chart-timeline-variant" aria-hidden="true"></i></div>
             <span class="metric-label">History window</span>
             <strong id="historyWindow">6h</strong>
-            <span class="metric-note">Default span used in passive analysis</span>
+            <span class="metric-note">Default window used when the home is reviewed automatically.</span>
           </article>
 
-          <article class="metric-card metric-card--soft">
-            <span class="metric-label">What to look for first</span>
-            <strong>Energy peaks, comfort drift, and repeated anomalies</strong>
-            <span class="metric-note">The panels below are ordered to make those patterns easy to compare.</span>
+          <article class="hero-visual">
+            <div class="hero-visual-grid" aria-hidden="true">
+              <div class="hero-visual-card">
+                <i class="mdi mdi-lightning-bolt-circle"></i>
+                <span>Energy</span>
+              </div>
+              <div class="hero-visual-card">
+                <i class="mdi mdi-sofa-outline"></i>
+                <span>Comfort</span>
+              </div>
+              <div class="hero-visual-card">
+                <i class="mdi mdi-shield-home-outline"></i>
+                <span>Security</span>
+              </div>
+              <div class="hero-visual-card hero-visual-card--wide">
+                <i class="mdi mdi-chart-box-outline"></i>
+                <span>Simple insights, interactive history, and clear next steps.</span>
+              </div>
+            </div>
           </article>
         </div>
       </section>
@@ -166,8 +200,8 @@
         <section class="panel ask-panel">
           <div class="section-head">
             <div>
-              <h2>Ask about your home</h2>
-              <p>Get plain-language answers, quick checks, or draft automation ideas based on the latest context.</p>
+              <h2><i class="mdi mdi-forum-outline" aria-hidden="true"></i> Ask about your home</h2>
+              <p>Ask one direct question and get a direct answer based on recent data and analyses.</p>
             </div>
           </div>
 
@@ -187,16 +221,16 @@
         <aside class="panel guidance-panel">
           <div class="section-head">
             <div>
-              <h2>How this view helps</h2>
-              <p>Built for end users who want value, not raw telemetry.</p>
+              <h2><i class="mdi mdi-star-four-points-outline" aria-hidden="true"></i> Start here</h2>
+              <p>The dashboard is ordered to make the most useful checks obvious.</p>
             </div>
           </div>
 
           <ul class="guidance-list">
-            <li>Start with the charts to spot where energy and activity cluster through the day.</li>
-            <li>Use the heatmap to find the hours where issues stack up across comfort, security, or anomalies.</li>
-            <li>Check the event feed for the exact signals that led to recent insights and recommendations.</li>
-            <li>Save feedback whenever the system should interpret a pattern differently next time.</li>
+            <li><i class="mdi mdi-chart-line" aria-hidden="true"></i><span>Use the charts to spot load peaks and repeated categories first.</span></li>
+            <li><i class="mdi mdi-grid" aria-hidden="true"></i><span>Use the heatmap to find the hours where issues cluster.</span></li>
+            <li><i class="mdi mdi-bell-outline" aria-hidden="true"></i><span>Open recent signals to see what triggered the latest insights.</span></li>
+            <li><i class="mdi mdi-message-badge-outline" aria-hidden="true"></i><span>Save feedback when the system should interpret something differently.</span></li>
           </ul>
         </aside>
       </section>
@@ -206,8 +240,8 @@
           <section class="panel chart-panel">
             <div class="section-head">
               <div>
-                <h2>Energy and activity patterns</h2>
-                <p>See where energy load, alerts, and repeated issues build up over time.</p>
+                <h2><i class="mdi mdi-chart-areaspline" aria-hidden="true"></i> Energy and activity patterns</h2>
+                <p>See where load, alerts, and repeated issues build up through the day.</p>
               </div>
             </div>
 
@@ -216,7 +250,7 @@
                 <div class="chart-copy">
                   <span class="eyebrow">Energy lens</span>
                   <h3>Load and usage</h3>
-                  <p>Tracks extracted energy usage and current draw from recent analyses.</p>
+                  <p>Track extracted energy use and power draw across recent analyses.</p>
                 </div>
                 <div class="chart-frame">
                   <canvas id="analysisChart" aria-label="Energy and power trend chart"></canvas>
@@ -227,7 +261,7 @@
                 <div class="chart-copy">
                   <span class="eyebrow">Category pulse</span>
                   <h3>Where issues repeat</h3>
-                  <p>Compares security, comfort, energy, and anomaly findings across recent runs.</p>
+                  <p>Compare where security, comfort, energy, and anomaly findings repeat.</p>
                 </div>
                 <div class="chart-frame">
                   <canvas id="categoryChart" aria-label="Category trend chart"></canvas>
@@ -239,8 +273,8 @@
           <section class="panel heatmap-panel" aria-labelledby="heatmap-title">
             <div class="section-head">
               <div>
-                <h2 id="heatmap-title">Signal heatmap</h2>
-                <p>Cross-check the strongest hours against categories so patterns are visible at a glance.</p>
+                <h2 id="heatmap-title"><i class="mdi mdi-heat-wave" aria-hidden="true"></i> Signal heatmap</h2>
+                <p>Cross-check the strongest hours against categories so patterns are easy to compare.</p>
               </div>
             </div>
 
@@ -296,8 +330,8 @@
           <section class="panel timeline-panel">
             <div class="section-head">
               <div>
-                <h2>Analysis timeline</h2>
-                <p>Skim the latest runs in order and expand the ones that deserve a closer look.</p>
+                <h2><i class="mdi mdi-timeline-outline" aria-hidden="true"></i> Analysis timeline</h2>
+                <p>Skim recent runs in order and expand only the ones that deserve a closer look.</p>
               </div>
             </div>
 
@@ -307,8 +341,8 @@
           <section class="panel analyses-panel" aria-labelledby="analyses-title">
             <div class="section-head">
               <div>
-                <h2 id="analyses-title">Latest analyses</h2>
-                <p>Each card opens a richer breakdown with sections, follow-ups, and feedback.</p>
+                <h2 id="analyses-title"><i class="mdi mdi-view-module-outline" aria-hidden="true"></i> Latest analyses</h2>
+                <p>Open the latest reviews when you want more detail, follow-ups, or feedback.</p>
               </div>
             </div>
 
@@ -320,7 +354,7 @@
           <section class="panel events-panel" aria-labelledby="events-title">
             <div class="section-head">
               <div>
-                <h2 id="events-title">Recent signals</h2>
+                <h2 id="events-title"><i class="mdi mdi-radar" aria-hidden="true"></i> Recent signals</h2>
                 <p>The changes most likely to explain the latest insights and recommendations.</p>
               </div>
             </div>
@@ -534,6 +568,6 @@
     })();
   </script>
 
-  <script src="static/app.js?v=0.1.6" defer></script>
+  <script src="static/app.js?v=0.1.7" defer></script>
 </body>
 </html>
