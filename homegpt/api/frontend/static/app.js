@@ -2,6 +2,62 @@
 const base = window.location.pathname.replace(/\/$/, "");
 const api  = (p) => `${base}/api/${p}`;
 const $    = (id) => document.getElementById(id);
+const THEME_KEY = "homegpt-theme";
+
+function readCssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+function chartPalette() {
+  return {
+    text: readCssVar("--chart-text") || "#6b7280",
+    grid: readCssVar("--chart-grid") || "rgba(0,0,0,0.08)",
+    energy: readCssVar("--chart-energy") || "#3d7a69",
+    power: readCssVar("--chart-power") || "#7d4a11",
+    security: readCssVar("--chart-security") || "#a3493f",
+    comfort: readCssVar("--chart-comfort") || "#c4802f",
+    anomaly: readCssVar("--chart-anomaly") || "#6a5690",
+  };
+}
+
+function applyTheme(theme, persist = true) {
+  const next = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = next;
+  if (persist) localStorage.setItem(THEME_KEY, next);
+
+  const label = $("themeLabel");
+  if (label) label.textContent = next === "dark" ? "Switch to light theme" : "Switch to dark theme";
+
+  // Repaint charts with the active palette without waiting for polling.
+  if (window._historyRows?.length) {
+    renderAnalysisTimeline(window._historyRows);
+    renderGrid(window._historyRows);
+    const { labels: categoryLabels, categoryCounts, categoryDetails } = buildCategoryChartData(window._historyRows);
+    const trendLabels = [];
+    const energyPts = [];
+    const powerPts = [];
+    window._historyRows.forEach((row) => {
+      const ts = row.ts || row[1];
+      const summary = row.summary || row[4];
+      const { energy, power } = extractMetrics(summary);
+      trendLabels.push(new Date(ts).toLocaleString());
+      energyPts.push(energy);
+      powerPts.push(power);
+    });
+    renderTrendChart(trendLabels, energyPts, powerPts);
+    renderCategoryTrendChart(categoryLabels, categoryCounts, categoryDetails);
+  }
+}
+
+function initThemeToggle() {
+  const btn = $("themeToggle");
+  if (!btn) return;
+  applyTheme(document.documentElement.dataset.theme || "light", false);
+  btn.addEventListener("click", () => {
+    const current = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+    applyTheme(current === "dark" ? "light" : "dark");
+  });
+}
 
 // ---------- Icons (MDI) ----------
 const modeIcon = (mode) => {
@@ -95,6 +151,24 @@ const snippet = (text, max = 140) => {
   const t = String(text).trim().replace(/\s+/g, " ");
   return t.length > max ? t.slice(0, max - 1) + "…" : t;
 };
+
+const formatDuration = (seconds) => {
+  if (seconds == null || Number.isNaN(Number(seconds))) return "No analysis yet";
+  const sec = Math.max(0, Math.floor(Number(seconds)));
+  const days = Math.floor(sec / 86400);
+  const hours = Math.floor((sec % 86400) / 3600);
+  const minutes = Math.floor((sec % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h ago`;
+  if (hours > 0) return `${hours}h ${minutes}m ago`;
+  if (minutes > 0) return `${minutes}m ago`;
+  return `${sec}s ago`;
+};
+
+function currentMode() {
+  const btn = $("toggleMode");
+  if (!btn) return "passive";
+  return (btn.dataset.mode || $("modeName")?.textContent || "passive").trim().toLowerCase();
+}
 
 
 // Detects the first “summary” heading so we can render it as a hero
@@ -513,37 +587,70 @@ function splitSections(markdown = "") {
   return sections;
 }
 
+function sectionSnippet(section) {
+  if (!section?.bodyTokens?.length) return "";
+  for (const token of section.bodyTokens) {
+    if (token.type === "list" && Array.isArray(token.items)) {
+      const item = token.items.find((entry) => (entry.text || "").trim());
+      if (item?.text) return item.text.replace(/\s+/g, " ").trim();
+    }
+    if (token.type === "paragraph" && token.text) {
+      return token.text.replace(/\s+/g, " ").trim();
+    }
+  }
+  return "";
+}
+
 function renderAnalysisTimeline(historyRows) {
   const container = document.getElementById('analysisTimeline');
   if (!container) return;
   container.innerHTML = "";
 
-  historyRows.forEach(row => {
+  const rows = Array.isArray(historyRows) ? historyRows.slice(0, 12) : [];
+  if (!rows.length) {
+    container.innerHTML = "<div class='text-sm text-gray-400'>No completed analyses yet.</div>";
+    return;
+  }
+
+  rows.forEach(row => {
     const ts = row.ts || row[1];
     const summary = row.summary || row[4] || "";
+    const sections = splitSections(summary);
     const categories = [];
+    const seen = new Set();
 
-    // Detect categories
-    if (/^Security\s*-/im.test(summary)) categories.push({ name: "Security", class: "category-security" });
-    if (/^Comfort\s*-/im.test(summary)) categories.push({ name: "Comfort", class: "category-comfort" });
-    if (/^Energy\s*-/im.test(summary)) categories.push({ name: "Energy", class: "category-energy" });
-    if (/^Anomalies\s*-/im.test(summary)) categories.push({ name: "Anomalies", class: "category-anomalies" });
+    sections.forEach((section) => {
+      const key = canonicalizeTitle(section.title || "");
+      if (!["security", "comfort", "energy", "anomalies", "presence"].includes(key) || seen.has(key)) return;
+      seen.add(key);
+      categories.push({
+        name: cap(key),
+        class: `category-${key}`
+      });
+    });
+
+    const lead = sections.map(sectionSnippet).find(Boolean) || snippet(summary, 200);
+    const fullBody = escapeHtml(summary).replace(/\n/g, "<br>");
 
     // Create entry
     const entry = document.createElement('div');
     entry.className = 'timeline-entry';
+    entry.setAttribute("aria-expanded", "false");
     entry.innerHTML = `
       <div class="timestamp">${new Date(ts).toLocaleString()}</div>
       <div class="categories">
         ${categories.map(c => `<span class="category-tag ${c.class}">${c.name}</span>`).join("")}
       </div>
-      <div class="details">${summary.replace(/\n/g, '<br>')}</div>
+      <div class="timeline-preview">${escapeHtml(lead)}</div>
+      <div class="details">${fullBody}</div>
     `;
 
     // Expand/collapse on click
     entry.addEventListener('click', () => {
       const details = entry.querySelector('.details');
-      details.style.display = details.style.display === 'block' ? 'none' : 'block';
+      const open = details.style.display === 'block';
+      details.style.display = open ? 'none' : 'block';
+      entry.setAttribute("aria-expanded", open ? "false" : "true");
     });
 
     container.appendChild(entry);
@@ -751,8 +858,8 @@ function renderHeatmap(rows, { range=24, filter="all", threshold=0 } = {}) {
 function highlightCards(rowsAtHour, catKey) {
   const ids = new Set((rowsAtHour || []).map(r => (Array.isArray(r) ? r[0] : r.id)));
   document.querySelectorAll(".preview-card").forEach(card => {
-    const title = card.querySelector(".preview-title")?.textContent?.toLowerCase() || "";
-    const matches = ids.size === 0 ? false : true; // you can match by row id if you inject it on card
+    const cardId = Number(card.dataset.analysisId || "");
+    const matches = ids.size > 0 && ids.has(cardId);
     card.classList.toggle("ring-1", matches);
     card.classList.toggle("ring-blue-300/50", matches);
   });
@@ -774,9 +881,11 @@ async function loadHistory() {
   let rows = await jsonFetch(api("history"));
   if (!rows) rows = [];
   const dataRows = Array.isArray(rows) ? rows : Object.values(rows);
+  window._historyRows = dataRows;
   
   renderAnalysisTimeline(dataRows);
   renderGrid(dataRows); // existing cards
+  renderOverview(dataRows);
 
   let HM_STATE = { range: 24, filter: "all", threshold: 0 };
 
@@ -815,27 +924,29 @@ async function loadHistory() {
   
 
   // --- NEW: Build data for the chart ---
-  const { labels, categoryCounts, categoryDetails } = buildCategoryChartData(dataRows);
+  const { labels: categoryLabels, categoryCounts, categoryDetails } = buildCategoryChartData(dataRows);
+  const trendLabels = [];
   const energyPts = [];
   const powerPts  = [];
   dataRows.forEach(row => {
     const ts = row.ts || row[1];
     const summary = row.summary || row[4];
     const { energy, power } = extractMetrics(summary);
-    labels.push(new Date(ts).toLocaleString());
+    trendLabels.push(new Date(ts).toLocaleString());
     energyPts.push(energy);
     powerPts.push(power);
   });
 
-  renderTrendChart(labels, energyPts, powerPts);
+  renderTrendChart(trendLabels, energyPts, powerPts);
 
-  renderCategoryTrendChart(labels, categoryCounts, categoryDetails);
+  renderCategoryTrendChart(categoryLabels, categoryCounts, categoryDetails);
 }
 
 function renderCategoryTrendChart(labels, counts, details) {
   const el = document.getElementById('categoryChart');
   if (!el) return;
   const ctx = el.getContext('2d');
+  const palette = chartPalette();
 
   if (window._categoryChart) {
     window._categoryChart.destroy();
@@ -849,32 +960,32 @@ function renderCategoryTrendChart(labels, counts, details) {
         {
           label: 'Security Events',
           data: counts.Security,
-          borderColor: '#ef4444',
-          backgroundColor: 'rgba(239,68,68,0.2)',
+          borderColor: palette.security,
+          backgroundColor: palette.security,
           fill: false,
           tension: 0.3
         },
         {
           label: 'Comfort Issues',
           data: counts.Comfort,
-          borderColor: '#f59e0b',
-          backgroundColor: 'rgba(245,158,11,0.2)',
+          borderColor: palette.comfort,
+          backgroundColor: palette.comfort,
           fill: false,
           tension: 0.3
         },
         {
           label: 'Energy Alerts',
           data: counts.Energy,
-          borderColor: '#3b82f6',
-          backgroundColor: 'rgba(59,130,246,0.2)',
+          borderColor: palette.energy,
+          backgroundColor: palette.energy,
           fill: false,
           tension: 0.3
         },
         {
           label: 'Anomalies',
           data: counts.Anomalies,
-          borderColor: '#8b5cf6',
-          backgroundColor: 'rgba(139,92,246,0.2)',
+          borderColor: palette.anomaly,
+          backgroundColor: palette.anomaly,
           fill: false,
           tension: 0.3
         }
@@ -884,6 +995,9 @@ function renderCategoryTrendChart(labels, counts, details) {
       responsive: true,
       interaction: { mode: 'nearest', intersect: true },
       plugins: {
+        legend: {
+          labels: { color: palette.text }
+        },
         tooltip: {
           callbacks: {
             label: (ctx) => {
@@ -906,8 +1020,17 @@ function renderCategoryTrendChart(labels, counts, details) {
         }
       },
       scales: {
-        y: { title: { display: true, text: "Event Count" }, beginAtZero: true },
-        x: { title: { display: true, text: "Time" } }
+        y: {
+          title: { display: true, text: "Event count", color: palette.text },
+          beginAtZero: true,
+          ticks: { color: palette.text },
+          grid: { color: palette.grid }
+        },
+        x: {
+          title: { display: true, text: "Time", color: palette.text },
+          ticks: { color: palette.text, maxRotation: 0, autoSkip: true, maxTicksLimit: 6 },
+          grid: { color: palette.grid }
+        }
       }
     }
   });
@@ -955,19 +1078,30 @@ function buildCategoryChartData(historyRows) {
     const ts = row.ts || row[1];
     const summary = row.summary || row[4] || "";
     labels.push(new Date(ts).toLocaleString());
+    const sections = splitSections(summary);
+    const buckets = {
+      security: [],
+      comfort: [],
+      energy: [],
+      anomalies: []
+    };
 
-    // For each category, find mentions in the summary
-    ["Security", "Comfort", "Energy", "Anomalies"].forEach(cat => {
-      const regex = new RegExp(`^${cat} - (.+)`, "im");
-      const match = summary.match(regex);
-      if (match) {
-        categoryCounts[cat].push(1);
-        categoryDetails[cat].push(match[1]);
-      } else {
-        categoryCounts[cat].push(0);
-        categoryDetails[cat].push(null);
-      }
+    sections.forEach((section) => {
+      const key = canonicalizeTitle(section.title || "");
+      if (!buckets[key]) return;
+      const detail = sectionSnippet(section);
+      buckets[key].push(detail || (section.title || key));
     });
+
+    categoryCounts.Security.push(buckets.security.length);
+    categoryCounts.Comfort.push(buckets.comfort.length);
+    categoryCounts.Energy.push(buckets.energy.length);
+    categoryCounts.Anomalies.push(buckets.anomalies.length);
+
+    categoryDetails.Security.push(buckets.security[0] || null);
+    categoryDetails.Comfort.push(buckets.comfort[0] || null);
+    categoryDetails.Energy.push(buckets.energy[0] || null);
+    categoryDetails.Anomalies.push(buckets.anomalies[0] || null);
   });
 
   return { labels, categoryCounts, categoryDetails };
@@ -978,6 +1112,7 @@ function renderTrendChart(labels, energyData, powerData) {
   const el = document.getElementById('analysisChart');
   if (!el) return;
   const ctx = el.getContext('2d');
+  const palette = chartPalette();
 
   // Use a different global to store the Chart.js instance
   if (window._analysisChart) {
@@ -992,7 +1127,7 @@ function renderTrendChart(labels, energyData, powerData) {
         {
           label: 'Hourly energy usage (kWh)',
           data: energyData,
-          borderColor: '#34d399',
+          borderColor: palette.energy,
           backgroundColor: 'transparent',
           tension: 0.3,
           spanGaps: true
@@ -1000,7 +1135,7 @@ function renderTrendChart(labels, energyData, powerData) {
         {
           label: 'Current power draw (W)',
           data: powerData,
-          borderColor: '#60a5fa',
+          borderColor: palette.power,
           backgroundColor: 'transparent',
           tension: 0.3,
           spanGaps: true,
@@ -1011,23 +1146,36 @@ function renderTrendChart(labels, energyData, powerData) {
     options: {
       responsive: true,
       interaction: { mode: 'index', intersect: false },
-      plugins: { tooltip: { enabled: true }, legend: { position: 'top' } },
+      plugins: {
+        tooltip: { enabled: true },
+        legend: {
+          position: 'top',
+          labels: { color: palette.text }
+        }
+      },
       scales: {
         y: {
           type: 'linear',
           display: true,
           position: 'left',
-          title: { display: true, text: 'kWh' },
+          title: { display: true, text: 'kWh', color: palette.text },
+          ticks: { color: palette.text },
+          grid: { color: palette.grid },
           beginAtZero: true
         },
         y2: {
           type: 'linear',
           display: true,
           position: 'right',
-          title: { display: true, text: 'W' },
+          title: { display: true, text: 'W', color: palette.text },
+          ticks: { color: palette.text },
           grid: { drawOnChartArea: false }
         },
-        x: { title: { display: true, text: 'Analysis timestamp' } }
+        x: {
+          title: { display: true, text: 'Analysis timestamp', color: palette.text },
+          ticks: { color: palette.text, maxRotation: 0, autoSkip: true, maxTicksLimit: 6 },
+          grid: { color: palette.grid }
+        }
       }
     }
   });
@@ -1214,20 +1362,56 @@ async function jsonFetch(url, opts = {}) {
 // ---------- Renderers ----------
 function renderStatus(data) {
   const count = data.event_count ?? 0;
-  $("eventCount").textContent = `Events since last analysis: ${count}`;
-  if (data.seconds_since_last != null) {
-    const sec = Math.floor(data.seconds_since_last);
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    $("sinceLast").textContent = `Time since last analysis: ${h}h ${m}m`;
-  } else {
-    $("sinceLast").textContent = "Time since last analysis: N/A";
+  const mode = (data.mode || "passive").toLowerCase();
+  const model = data.model || "gpt-5";
+  const dryRun = data.dry_run !== false;
+  const windowHours = data.history_hours ?? 6;
+  const last = data.last_analysis || null;
+  const lastTs = last?.ts || last?.[1] || null;
+
+  const eventText = `${count} buffered event${count === 1 ? "" : "s"}`;
+  if ($("eventCount")) $("eventCount").textContent = eventText;
+  if ($("sinceLast")) $("sinceLast").textContent = formatDuration(data.seconds_since_last);
+  if ($("lastAnalysisStamp")) {
+    $("lastAnalysisStamp").textContent = lastTs
+      ? `Most recent run: ${new Date(lastTs).toLocaleString()}`
+      : "Run a fresh analysis to populate the dashboard";
   }
+  if ($("modeName")) $("modeName").textContent = cap(mode);
+  if ($("modeHint")) {
+    $("modeHint").textContent = mode === "active"
+      ? (dryRun ? "Can draft allow-listed actions while dry run is on." : "Can act on allow-listed entities when needed.")
+      : "Observes your home and reports back clearly.";
+  }
+  if ($("modelName")) $("modelName").textContent = model;
+  if ($("dryRunState")) $("dryRunState").textContent = dryRun ? "Dry run on" : "Live actions enabled";
+  if ($("historyWindow")) $("historyWindow").textContent = `${windowHours}h default window`;
+  if ($("toggleMode")) $("toggleMode").dataset.mode = mode;
+}
+
+function renderOverview(rows) {
+  const lead = $("overviewLead");
+  if (!lead) return;
+  if (!rows?.length) {
+    lead.textContent = "Run a fresh analysis to see where energy use, comfort drift, and repeated issues deserve attention.";
+    return;
+  }
+
+  const latest = Array.isArray(rows[0])
+    ? { ts: rows[0][1], summary: rows[0][4], mode: rows[0][2] }
+    : rows[0];
+  const sections = splitSections(latest.summary || "");
+  const firstUseful = sections.map(sectionSnippet).find(Boolean) || snippet(latest.summary || "", 210);
+  const prefix = latest.mode === "active"
+    ? "Latest active review:"
+    : "Latest home summary:";
+  lead.textContent = `${prefix} ${firstUseful}`;
 }
 
 async function renderGrid(rows) {
   const grid = $("analysisGrid");
   grid.innerHTML = "";
+  const palette = chartPalette();
 
   rows.forEach((row) => {
     const r = Array.isArray(row)
@@ -1238,6 +1422,7 @@ async function renderGrid(rows) {
 
     const card = document.createElement("button");
     card.className = "preview-card w-full text-left hover:bg-white/5 transition-colors";
+    card.dataset.analysisId = String(r.id ?? "");
     card.addEventListener("click", (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
@@ -1291,7 +1476,16 @@ async function renderGrid(rows) {
         const ctx = canvas.getContext("2d");
         new Chart(ctx, {
           type: "line",
-          data: { labels: series.map((_,i)=>i+1), datasets: [{ data: series, tension: .35, pointRadius: 0, borderWidth: 2 }] },
+          data: {
+            labels: series.map((_, i) => i + 1),
+            datasets: [{
+              data: series,
+              tension: .35,
+              pointRadius: 0,
+              borderWidth: 2,
+              borderColor: palette.power
+            }]
+          },
           options: {
             responsive: true, maintainAspectRatio: false,
             plugins: { legend: { display:false } },
@@ -1310,7 +1504,6 @@ async function renderGrid(rows) {
 // ---------- Data loaders ----------
 async function loadStatus() {
   const data = await jsonFetch(api("status"));
-  $("toggleMode").textContent = data.mode || "passive";
   renderStatus(data);
 }
 
@@ -1323,7 +1516,7 @@ async function loadStatus() {
 
 // ---------- Interactions ----------
 async function toggleMode() {
-  const cur = $("toggleMode").textContent.trim().toLowerCase();
+  const cur = currentMode();
   const next = cur === "active" ? "passive" : "active";
   await jsonFetch(api(`mode?mode=${encodeURIComponent(next)}`), { method: "POST" });
   await loadStatus();
@@ -1419,7 +1612,10 @@ async function loadEvents() {
           <div class="body">${ev._bodyHtml || ""}</div>
         </div>
 
-        <div class="event-actions"> … </div>
+        <div class="event-actions">
+          <button class="chip js-add" type="button">Add feedback</button>
+          <button class="chip js-view" type="button">View feedback</button>
+        </div>
         <div id="fb-list-${ev.id}" class="hidden mt-1 col-span-3"></div>
       `;
 
@@ -1496,7 +1692,7 @@ async function runAnalysisNow() {
   btn.setAttribute("aria-busy", "true");
   btn.classList.add("opacity-60", "pointer-events-none");
 
-  const mode = document.getElementById("toggleMode").textContent.trim().toLowerCase() || "passive";
+  const mode = currentMode();
 
   // start progress: 25% immediately, then drift toward 75%
   prog.startIdle();
@@ -2035,7 +2231,7 @@ function paintEventsList(list) {
     row.querySelector(".js-view")?.addEventListener("click", () => {
       toggleFeedbackList(ev.id);
     });
-    queueMicrotask(() => resolveDeviceChips(listEl));
+    queueMicrotask(() => resolveDeviceChips(box));
     box.appendChild(row);
   });
 }
@@ -2273,6 +2469,7 @@ function init() {
   $("toggleMode").addEventListener("click", toggleMode);
   $("runAnalysis").addEventListener("click", runAnalysisNow);
   initFeedbackManager();
+  initThemeToggle();
 
   // 🔧 Fallback click for unresolved device chips
   if (!window._deviceChipHandlerBound) {
