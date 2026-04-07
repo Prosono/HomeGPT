@@ -50,6 +50,7 @@ from homegpt.app.topology import (
 )
 from homegpt.api.analysis import (
     DEFAULT_HISTORY_HOURS,
+    EVENTS_MAX_CHARS,
     HISTORY_MAX_LINES,
     STATE_MAX_LINES,
     TOPO_MAX_LINES,
@@ -87,7 +88,7 @@ EVENT_BYTES: int = 0                  # approx char budget for "EVENTS:" bullets
 EVENT_UNIQUE_IDS: set[str] = set()    # unique entities seen since last snapshot
 
 # Soft ceilings to trigger auto-run early (tweak to taste or move to config)
-EVENTS_TRIGGER_CHARS   = int(EVENTS_MAX_CHARS * 1.50)  # e.g. ~2250 chars
+EVENTS_TRIGGER_CHARS   = int(EVENTS_MAX_CHARS * 1.50)  # e.g. ~4500 chars
 EVENTS_TRIGGER_UNIQUE  = 200                            # ~80 distinct entities
 AUTO_SIZE_MIN_INTERVAL_SEC = 60 * 60                   # 10 min debounce (size-based)
 
