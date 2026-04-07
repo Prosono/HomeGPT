@@ -5,7 +5,7 @@ url: https://github.com/Prosono/HomeGPT
 startup: application
 init: false
 image: ghcr.io/prosono/homegpt
-version: "0.1.4"
+version: "0.1.5"
 arch:
   - amd64
   - aarch64
