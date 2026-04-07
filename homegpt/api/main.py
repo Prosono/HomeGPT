@@ -600,7 +600,14 @@ _ensure_schema()  # ← add this
 async def ingress_root():
     index_file = FRONTEND_DIR / "index.html"
     if index_file.exists():
-        return FileResponse(index_file)
+        return FileResponse(
+            index_file,
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            },
+        )
     return {"error": "Dashboard frontend not found"}
 
 app.mount("/static", StaticFiles(directory=FRONTEND_DIR / "static"), name="static")
